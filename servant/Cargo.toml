@@ -1,0 +1,24 @@
+[package]
+name = "servant"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core typed API description: combinators, content types, links, request/response, and errors for servant-rs."
+
+[dependencies]
+http.workspace = true
+bytes.workspace = true
+mime.workspace = true
+percent-encoding.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+thiserror.workspace = true
+futures-core.workspace = true
+servant-macros.workspace = true
+
+[dev-dependencies]
+serde = { workspace = true }
+proptest.workspace = true

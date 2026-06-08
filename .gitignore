@@ -1,0 +1,11 @@
+/target/
+/research/
+/.codegraph/
+/CLAUDE.local.md
+
+!/.claude/
+!/.claude/**
+
+*.profraw
+*.profdata
+.DS_Store

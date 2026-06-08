@@ -1,0 +1,21 @@
+[package]
+name = "servant-openapi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OpenAPI 3.0 generation from a servant-rs API description (via the shared docs model)."
+
+[dependencies]
+servant.workspace = true
+servant-docs.workspace = true
+servant-macros.workspace = true
+http.workspace = true
+mime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json.workspace = true

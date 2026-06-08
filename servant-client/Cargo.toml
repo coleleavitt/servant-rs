@@ -1,0 +1,33 @@
+[package]
+name = "servant-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Typed HTTP clients generated from a servant-rs API description, with a pluggable transport."
+
+[dependencies]
+servant.workspace = true
+http.workspace = true
+bytes.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+mime.workspace = true
+percent-encoding.workspace = true
+serde.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+
+[features]
+default = ["hyper"]
+hyper = ["dep:hyper", "dep:hyper-util", "dep:tokio"]
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json.workspace = true

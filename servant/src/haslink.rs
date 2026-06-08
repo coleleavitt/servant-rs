@@ -1,0 +1,291 @@
+//! Type-safe link generation, mirroring `Servant.Links` (`HasLink`/`MkLink`/
+//! `safeLink`).
+//!
+//! [`links`] walks the **same** API description, producing a link builder per
+//! endpoint. The builder's argument list ([`HasLink::LinkArgs`]) contains only
+//! the path- and query-bearing combinators (captures, query params/flags) — not
+//! headers or request bodies, which don't appear in a URL — so a link can only
+//! be built for an endpoint that actually exists in the API, with exactly the
+//! values its URL needs. This is the fourth interpretation of the one
+//! description, alongside server, client, and docs.
+
+use std::sync::Arc;
+
+use crate::api::{
+    Alt,
+    AuthProtect,
+    BasicAuth,
+    Capture,
+    CaptureAll,
+    Description,
+    Header,
+    HttpVersion,
+    IsSecure,
+    NoContentVerb,
+    Path,
+    QueryFlag,
+    QueryParam,
+    QueryParams,
+    RemoteHost,
+    ReqBody,
+    Summary,
+    Vault,
+    Verb,
+    WithNamedContext,
+    WithResource,
+};
+use crate::hlist::{HCons, HList, HNil};
+use crate::http_data::ToHttpApiData;
+use crate::link::{Link, Param};
+use crate::modifiers::{ArgShape, CaptureShape};
+
+/// Walk an endpoint, contributing its path segments and query parameters to a
+/// [`Link`]. The `LinkArgs` HList omits header/body arguments.
+pub trait HasLink {
+    /// The values needed to build a link to this endpoint (captures + query).
+    type LinkArgs: HList;
+    /// Contribute this combinator's segments/params, consuming its args.
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link);
+}
+
+impl<M, const STATUS: u16, CTypes, A> HasLink for Verb<M, STATUS, CTypes, A> {
+    type LinkArgs = HNil;
+    fn add_to_link(&self, _args: HNil, _link: &mut Link) {}
+}
+
+impl<M> HasLink for NoContentVerb<M> {
+    type LinkArgs = HNil;
+    fn add_to_link(&self, _args: HNil, _link: &mut Link) {}
+}
+
+impl<M, const STATUS: u16, CTypes, A> HasLink
+    for crate::api::VerbWithHeaders<M, STATUS, CTypes, A>
+{
+    type LinkArgs = HNil;
+    fn add_to_link(&self, _args: HNil, _link: &mut Link) {}
+}
+
+impl<M, CTypes, Resp> HasLink for crate::api::UVerb<M, CTypes, Resp> {
+    type LinkArgs = HNil;
+    fn add_to_link(&self, _args: HNil, _link: &mut Link) {}
+}
+
+impl<M, const STATUS: u16, Framing, CType, T> HasLink
+    for crate::api::StreamVerb<M, STATUS, Framing, CType, T>
+{
+    type LinkArgs = HNil;
+    fn add_to_link(&self, _args: HNil, _link: &mut Link) {}
+}
+
+impl<Next: HasLink> HasLink for Path<Next> {
+    type LinkArgs = Next::LinkArgs;
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+        link.add_segment(&self.segment);
+        self.next.add_to_link(args, link);
+    }
+}
+
+impl<A, S, Next> HasLink for Capture<A, S, Next>
+where
+    A: ToHttpApiData,
+    S: CaptureShape<A>,
+    Next: HasLink,
+{
+    type LinkArgs = HCons<<S as CaptureShape<A>>::Out, Next::LinkArgs>;
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+        let HCons { head, tail } = args;
+        match <S as CaptureShape<A>>::into_value(head) {
+            Some(a) => link.add_segment(&a.to_url_piece()),
+            None => link.add_segment(""),
+        }
+        self.next.add_to_link(tail, link);
+    }
+}
+
+impl<A, Next> HasLink for CaptureAll<A, Next>
+where
+    A: ToHttpApiData,
+    Next: HasLink,
+{
+    type LinkArgs = HCons<Vec<A>, Next::LinkArgs>;
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+        let HCons { head, tail } = args;
+        for a in &head {
+            link.add_segment(&a.to_url_piece());
+        }
+        self.next.add_to_link(tail, link);
+    }
+}
+
+impl<A, P, S, Next> HasLink for QueryParam<A, P, S, Next>
+where
+    A: ToHttpApiData,
+    (P, S): ArgShape<A>,
+    Next: HasLink,
+{
+    type LinkArgs = HCons<<(P, S) as ArgShape<A>>::Out, Next::LinkArgs>;
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+        let HCons { head, tail } = args;
+        if let Some(a) = <(P, S) as ArgShape<A>>::into_value(head) {
+            link.add_query(Param::Single(self.name.clone(), a.to_query_param()));
+        }
+        self.next.add_to_link(tail, link);
+    }
+}
+
+impl<A, Next> HasLink for QueryParams<A, Next>
+where
+    A: ToHttpApiData,
+    Next: HasLink,
+{
+    type LinkArgs = HCons<Vec<A>, Next::LinkArgs>;
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+        let HCons { head, tail } = args;
+        for a in &head {
+            link.add_query(Param::ArrayElem(self.name.clone(), a.to_query_param()));
+        }
+        self.next.add_to_link(tail, link);
+    }
+}
+
+impl<Next: HasLink> HasLink for QueryFlag<Next> {
+    type LinkArgs = HCons<bool, Next::LinkArgs>;
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+        let HCons { head, tail } = args;
+        if head {
+            link.add_query(Param::Flag(self.name.clone()));
+        }
+        self.next.add_to_link(tail, link);
+    }
+}
+
+// Header and ReqBody do not appear in URLs: they contribute no link args.
+macro_rules! link_skip {
+    ($ty:ident < $($g:ident),+ >) => {
+        impl<$($g),+, Next: HasLink> HasLink for $ty<$($g),+, Next> {
+            type LinkArgs = Next::LinkArgs;
+            fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+                self.next.add_to_link(args, link);
+            }
+        }
+    };
+    ($ty:ident) => {
+        impl<Next: HasLink> HasLink for $ty<Next> {
+            type LinkArgs = Next::LinkArgs;
+            fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+                self.next.add_to_link(args, link);
+            }
+        }
+    };
+}
+link_skip!(Header<A, P, S>);
+link_skip!(ReqBody<CTypes, A, S>);
+link_skip!(Description);
+link_skip!(Summary);
+// Server-only combinators are URL-transparent: they add no link arguments.
+link_skip!(Vault);
+link_skip!(WithResource<R>);
+link_skip!(BasicAuth<Usr>);
+link_skip!(AuthProtect<Usr>);
+link_skip!(IsSecure);
+link_skip!(HttpVersion);
+link_skip!(RemoteHost);
+link_skip!(WithNamedContext<Name>);
+
+/// A link builder for one endpoint.
+pub struct LinkEndpoint<Api> {
+    chain: Arc<Api>,
+}
+
+impl<Api: HasLink> LinkEndpoint<Api> {
+    /// Build a [`Link`] to this endpoint from its path/query arguments.
+    pub fn link(&self, args: Api::LinkArgs) -> Link {
+        let mut link = Link::new();
+        self.chain.add_to_link(args, &mut link);
+        link
+    }
+}
+
+/// Build a link-builder value from an API description: a [`LinkEndpoint`] per
+/// endpoint, or a nested tuple mirroring [`Alt`].
+pub trait MakeLink {
+    /// The resulting link-builder value.
+    type Links;
+    /// Construct it.
+    fn make_link(self) -> Self::Links;
+}
+
+impl<Api: HasLink> MakeLink for Api {
+    type Links = LinkEndpoint<Api>;
+    fn make_link(self) -> Self::Links {
+        LinkEndpoint {
+            chain: Arc::new(self),
+        }
+    }
+}
+
+impl<L: MakeLink, R: MakeLink> MakeLink for Alt<L, R> {
+    type Links = (L::Links, R::Links);
+    fn make_link(self) -> Self::Links {
+        (self.left.make_link(), self.right.make_link())
+    }
+}
+
+/// Build type-safe link builders from an API description.
+pub fn links<Api: MakeLink>(api: Api) -> Api::Links {
+    api.make_link()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{alt, capture, get, path, query_flag, query_param};
+    use crate::content::Json;
+    use crate::hlist::{HCons, HNil, hlist1};
+
+    #[test]
+    fn builds_link_for_capture_endpoint() {
+        // "users" :> Capture "id" u64 :> Get
+        let api = path("users", capture::<u64, _>("id", get::<(Json,), u64>()));
+        let ep = links(api);
+        let link = ep.link(hlist1(42u64));
+        assert_eq!(link.to_uri(), "/users/42");
+    }
+
+    #[test]
+    fn builds_link_with_query_and_flag() {
+        // "search" :> QueryParam "q" String :> QueryFlag "verbose" :> Get
+        let api = path(
+            "search",
+            query_param::<String, _>("q", query_flag("verbose", get::<(Json,), u64>())),
+        );
+        let ep = links(api);
+        // q present, flag on
+        let link = ep.link(HCons {
+            head: Some("rust".to_string()),
+            tail: hlist1(true),
+        });
+        assert_eq!(link.to_uri(), "/search?q=rust&verbose");
+        // q omitted (None), flag off -> bare path
+        let ep2 = links(path(
+            "search",
+            query_param::<String, _>("q", query_flag("verbose", get::<(Json,), u64>())),
+        ));
+        let link2 = ep2.link(HCons {
+            head: None,
+            tail: hlist1(false),
+        });
+        assert_eq!(link2.to_uri(), "/search");
+    }
+
+    #[test]
+    fn alt_produces_a_link_builder_per_endpoint() {
+        let api = alt(
+            path("a", get::<(Json,), u64>()),
+            path("b", capture::<u64, _>("n", get::<(Json,), u64>())),
+        );
+        let (a, b) = links(api);
+        assert_eq!(a.link(HNil).to_uri(), "/a");
+        assert_eq!(b.link(hlist1(7u64)).to_uri(), "/b/7");
+    }
+}
