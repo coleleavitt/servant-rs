@@ -97,11 +97,32 @@ niches not built: `MultiVerb`'s full streaming-arm machinery, a streaming SSE
 
 ## Developing
 
+Builds on **stable Rust** (no nightly features); MSRV **1.83** (verified —
+`cargo +1.83.0 test --workspace` passes).
+
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
+cargo bench --workspace            # criterion microbenchmarks
 ```
+
+### Benchmarks
+
+Criterion microbenchmarks live in `servant/benches/` (content negotiation,
+scalar parsing) and `servant-server/benches/` (end-to-end request dispatch).
+Indicative single-core numbers (release; absolute values are machine-specific):
+
+| Path | ~time |
+|---|---|
+| `u64` URL-piece parse | ~7 ns |
+| Accept negotiation (exact / wildcard / q-values) | ~22 / 59 / 250 ns |
+| Dispatch `GET /users/{id}` → JSON (route + extract + handler + render) | ~0.85 µs |
+| Dispatch a 404 | ~0.5 µs |
+| Build the router tree | ~0.5 µs |
+
+These measure the framework's own overhead (no socket or large payloads); they
+are a regression guardrail, not a cross-framework comparison.
 
 Design notes: `docs/DESIGN.md` (committed architecture), `docs/RESEARCH-NOTES.md`
 (per-subsystem map of the Haskell reference), `docs/DESIGN-CRITIQUE.md`

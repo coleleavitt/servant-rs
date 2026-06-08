@@ -37,5 +37,10 @@ http-body-util.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 proptest.workspace = true
+criterion.workspace = true
 servant-client.workspace = true
 servant-docs.workspace = true
+
+[[bench]]
+name = "dispatch"
+harness = false

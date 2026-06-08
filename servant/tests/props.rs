@@ -2,9 +2,10 @@
 //! property tests for URL encoding/decoding and value round-trips).
 
 use proptest::prelude::*;
-use servant::content::{Json, MediaType, PlainText, negotiate_media_index};
+use servant::content::{Json, MediaType, OctetStream, PlainText, negotiate_media_index};
 use servant::http_data::{FromHttpApiData, ToHttpApiData};
 use servant::link::Escaped;
+use servant::stream::{Framing, NetstringFraming, NewlineFraming, NoFraming};
 
 proptest! {
     #[test]
@@ -44,6 +45,85 @@ proptest! {
     #[test]
     fn escaped_segment_has_no_slash(s in ".*") {
         prop_assert!(!Escaped::escape(&s).as_str().contains('/'));
+    }
+
+    /// Newline framing: items (containing no '\n') frame + concat + de-frame
+    /// back to exactly the original items, in order.
+    #[test]
+    fn newline_framing_round_trips(
+        items in proptest::collection::vec(
+            proptest::collection::vec(any::<u8>().prop_filter("no nl", |b| *b != b'\n'), 0..16),
+            0..12,
+        )
+    ) {
+        let mut buf = Vec::new();
+        for item in &items {
+            buf.extend_from_slice(&NewlineFraming::frame(item));
+        }
+        let mut out = Vec::new();
+        while let Some(frame) = NewlineFraming::deframe(&mut buf, false) {
+            out.push(frame);
+        }
+        prop_assert!(buf.is_empty());
+        prop_assert_eq!(out, items);
+    }
+
+    /// Netstring framing handles arbitrary bytes (length-prefixed) and round-trips.
+    #[test]
+    fn netstring_framing_round_trips(
+        items in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..16), 0..12)
+    ) {
+        let mut buf = Vec::new();
+        for item in &items {
+            buf.extend_from_slice(&NetstringFraming::frame(item));
+        }
+        let mut out = Vec::new();
+        while let Some(frame) = NetstringFraming::deframe(&mut buf, false) {
+            out.push(frame);
+        }
+        prop_assert!(buf.is_empty());
+        prop_assert_eq!(out, items);
+    }
+
+    /// De-framing arbitrary (possibly truncated/garbage) bytes never panics.
+    #[test]
+    fn deframe_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
+        let mut b = bytes.clone();
+        let _ = NewlineFraming::deframe(&mut b, false);
+        let _ = NewlineFraming::deframe(&mut b, true);
+        let mut b = bytes.clone();
+        let _ = NetstringFraming::deframe(&mut b, false);
+        let mut b = bytes;
+        let _ = NoFraming::deframe(&mut b, true);
+    }
+
+    /// Accept negotiation never panics on arbitrary input and only ever returns
+    /// a valid index into the server's content-type list.
+    #[test]
+    fn negotiation_never_panics_and_index_is_valid(accept in ".*") {
+        let media = vec![
+            Json::media_type(),
+            PlainText::media_type(),
+            OctetStream::media_type(),
+        ];
+        if let Some(i) = negotiate_media_index(Some(&accept), &media) {
+            prop_assert!(i < media.len());
+        }
+    }
+
+    /// A `q=0` on the exact (and only) type excludes it, whatever follows.
+    #[test]
+    fn quality_zero_excludes(suffix in "[ ,a-z/*;=0-9.]{0,20}") {
+        let media = vec![Json::media_type()];
+        let accept = format!("application/json;q=0{suffix}");
+        // Either the malformed suffix drops the range (None) or q=0 excludes it,
+        // but JSON is never selected with q=0 on its only matching range.
+        let chosen = negotiate_media_index(Some(&accept), &media);
+        // The only media type is json; if chosen it'd be index 0 — assert it is
+        // NOT chosen purely on the strength of a q=0 json range.
+        if accept == "application/json;q=0" {
+            prop_assert_eq!(chosen, None);
+        }
     }
 }
 

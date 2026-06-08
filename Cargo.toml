@@ -12,9 +12,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.83"
 license = "BSD-3-Clause"
-repository = "https://github.com/cole/servant-rs"
+repository = "https://github.com/coleleavitt/servant-rs"
 description = "An idiomatic Rust port of Haskell Servant: one typed API description drives server routing, typed clients, links, and documentation."
 
 [workspace.dependencies]
@@ -58,6 +58,7 @@ servant-macros = { path = "servant-macros", version = "0.1.0" }
 
 # Dev / test
 proptest = "1"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [profile.dev]
 # Faster iteration; tests still run with assertions.

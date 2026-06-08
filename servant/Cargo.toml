@@ -22,3 +22,8 @@ servant-macros.workspace = true
 [dev-dependencies]
 serde = { workspace = true }
 proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "negotiation"
+harness = false
