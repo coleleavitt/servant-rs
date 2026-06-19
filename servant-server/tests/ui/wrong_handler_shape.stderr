@@ -1,0 +1,23 @@
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+ --> tests/ui/wrong_handler_shape.rs:8:19
+  |
+8 |     let _router = serve(api, || async { Ok::<_, ServerError>("missing id".to_string()) });
+  |                   ^^^^^^^^^^^--^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |                   |          |
+  |                   |          takes 0 arguments
+  |                   expected closure that takes 1 argument
+  |
+  = note: required for `{closure@$DIR/tests/ui/wrong_handler_shape.rs:8:30: 8:32}` to implement `HandlerFn<HCons<u64, HNil>>`
+  = note: required for `servant::api::Path<servant::api::Capture<u64, Strict, Verb<Get, 200, (servant::content::Json,), String>>>` to implement `HasServer<{closure@$DIR/tests/ui/wrong_handler_shape.rs:8:30: 8:32}>`
+note: required by a bound in `serve`
+ --> src/serve.rs
+  |
+  | pub fn serve<Api, H>(api: Api, handler: H) -> Router
+  |        ----- required by a bound in this function
+  | where
+  |     Api: HasServer<H>,
+  |          ^^^^^^^^^^^^ required by this bound in `serve`
+help: consider changing the closure to take and ignore the expected argument
+  |
+8 |     let _router = serve(api, |_| async { Ok::<_, ServerError>("missing id".to_string()) });
+  |                               +

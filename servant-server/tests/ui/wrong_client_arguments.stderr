@@ -1,0 +1,24 @@
+error[E0277]: the trait bound `(): RunClient` is not satisfied
+ --> tests/ui/wrong_client_arguments.rs:9:33
+  |
+9 |     let _future = endpoint.call(&(), servant::hlist!["not-a-u64".to_string()]);
+  |                            ---- ^^^ the trait `RunClient` is not implemented for `()`
+  |                            |
+  |                            required by a bound introduced by this call
+  |
+help: the trait `RunClient` is implemented for `HyperClient`
+ --> $WORKSPACE/servant-client/src/runclient.rs
+  |
+  |     impl RunClient for HyperClient {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `ClientEndpoint::<Api>::call`
+ --> $WORKSPACE/servant-client/src/client/endpoint.rs
+  |
+  |     pub async fn call<T: RunClient>(
+  |                          ^^^^^^^^^ required by this bound in `ClientEndpoint::<Api>::call`
+
+error[E0308]: mismatched types
+ --> tests/ui/wrong_client_arguments.rs:9:54
+  |
+9 |     let _future = endpoint.call(&(), servant::hlist!["not-a-u64".to_string()]);
+  |                                                      ^^^^^^^^^^^^^^^^^^^^^^^ expected `u64`, found `String`

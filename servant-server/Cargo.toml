@@ -40,6 +40,8 @@ proptest.workspace = true
 criterion.workspace = true
 servant-client.workspace = true
 servant-docs.workspace = true
+servant-openapi.workspace = true
+trybuild.workspace = true
 
 [[bench]]
 name = "dispatch"

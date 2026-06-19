@@ -1,0 +1,57 @@
+error[E0277]: the trait bound `NotAMime: MediaType` is not satisfied
+ --> tests/ui/unsupported_content_type.rs:9:25
+  |
+9 |     let _router = serve(get::<(NotAMime,), String>(), || async {
+  |                   ----- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |                   |
+  |                   required by a bound introduced by this call
+  |
+help: the trait `MediaType` is not implemented for `NotAMime`
+ --> tests/ui/unsupported_content_type.rs:4:1
+  |
+4 | struct NotAMime;
+  | ^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `MediaType`:
+            EventStream
+            FormUrlEncoded
+            Json
+            OctetStream
+            PlainText
+  = note: required for `(NotAMime,)` to implement `AllMime`
+  = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `ServerChain`
+  = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `HasServer<_>`
+note: required by a bound in `serve`
+ --> src/serve.rs
+  |
+  | pub fn serve<Api, H>(api: Api, handler: H) -> Router
+  |        ----- required by a bound in this function
+  | where
+  |     Api: HasServer<H>,
+  |          ^^^^^^^^^^^^ required by this bound in `serve`
+
+error[E0277]: the trait bound `String: MimeRender<NotAMime>` is not satisfied
+ --> tests/ui/unsupported_content_type.rs:9:25
+  |
+9 |     let _router = serve(get::<(NotAMime,), String>(), || async {
+  |                   ----- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `MimeRender<NotAMime>` is not implemented for `String`
+  |                   |
+  |                   required by a bound introduced by this call
+  |
+help: the trait `MimeRender<NotAMime>` is not implemented for `String`
+      but trait `MimeRender<PlainText>` is implemented for it
+ --> $WORKSPACE/servant/src/content/codecs.rs
+  |
+  | impl MimeRender<PlainText> for String {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: for that trait implementation, expected `PlainText`, found `NotAMime`
+  = note: required for `(NotAMime,)` to implement `AllMimeRender<String>`
+  = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `ServerChain`
+  = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `HasServer<_>`
+note: required by a bound in `serve`
+ --> src/serve.rs
+  |
+  | pub fn serve<Api, H>(api: Api, handler: H) -> Router
+  |        ----- required by a bound in this function
+  | where
+  |     Api: HasServer<H>,
+  |          ^^^^^^^^^^^^ required by this bound in `serve`
