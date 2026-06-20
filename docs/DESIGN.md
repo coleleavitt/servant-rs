@@ -318,6 +318,8 @@ All previously-deferred items are now implemented and tested:
   record (`into_handlers`); `#[derive(ToSchema)]` produces an OpenAPI object
   schema from a struct's fields (required = non-`Option`).
 
-Genuinely out of scope (niche): `MultiVerb`'s streaming response arms, an SSE
-*client* parser, TLS termination in the bundled server, and recursive
-`#[derive]` JSON schemas with a `components/schemas` section.
+Still out of scope (niche): a full `components/schemas` registry with recursive
+reference de-duplication, browser EventSource adapters, and every TLS deployment
+shape. The current scope includes parsed SSE events, `MultiVerb`-style streaming
+arms, a small `rustls` HTTP/1 listener adapter, and nested structural
+`#[derive(ToSchema)]` output without a shared component registry.

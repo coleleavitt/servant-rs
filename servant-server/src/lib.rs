@@ -1,6 +1,6 @@
 //! `servant-server` — runtime routing, extraction, and adapters for servant-rs.
 //!
-//! Given a [`servant`] API description and matching handler(s), [`serve`] builds
+//! Given a [`servant`] API description and matching handler(s), [`serve()`] builds
 //! an inspectable [`Router`] whose semantics mirror Haskell Servant:
 //!
 //! - the routing tree and left-biased [`router::choice`] selection
@@ -32,6 +32,11 @@ pub mod response;
 pub mod result;
 pub mod router;
 pub mod serve;
+#[cfg(feature = "hyper")]
+pub mod sse;
+pub mod testing;
+#[cfg(feature = "rustls")]
+pub mod tls;
 
 pub use adapter::{ConnectionInfo, RouterService};
 pub use context::{AuthCheck, BasicAuthCheck, Context, NamedContext, ResourceProvider};
@@ -39,3 +44,8 @@ pub use extract::ServerChain;
 pub use result::RouteResult;
 pub use router::Router;
 pub use serve::{HasServer, RouterShape, layout, serve, serve_with_context};
+#[cfg(feature = "hyper")]
+pub use sse::{SseKeepAlive, sse_keep_alive};
+pub use testing::{TestClient, TestRequest, TestResponse};
+#[cfg(feature = "rustls")]
+pub use tls::{RustlsConfig, TlsClientAuth, serve_rustls_listener};

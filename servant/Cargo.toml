@@ -17,6 +17,7 @@ serde_json.workspace = true
 serde_urlencoded.workspace = true
 thiserror.workspace = true
 futures-core.workspace = true
+futures-util.workspace = true
 servant-macros.workspace = true
 
 [dev-dependencies]

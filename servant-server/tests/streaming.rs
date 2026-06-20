@@ -1,11 +1,13 @@
 //! Streaming endpoints: framed item streams and Server-Sent Events. The body is
 //! produced incrementally; here we collect it and assert the framed wire form.
 
+use std::time::Duration;
+
 use bytes::Bytes;
 use http::StatusCode;
 use http_body_util::{BodyExt, Full};
 use servant::prelude::*;
-use servant_server::{RouterService, serve};
+use servant_server::{RouterService, serve, sse_keep_alive};
 
 async fn body_of(
     svc: &RouterService,
@@ -70,6 +72,40 @@ async fn server_sent_events() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(ct.as_deref(), Some("text/event-stream"));
     assert_eq!(body, "data: hello\n\nevent: greeting\ndata: world\n\n");
+}
+
+#[tokio::test]
+async fn server_sent_events_can_send_keep_alive_comments() {
+    let api = path("events", sse_get());
+    let svc = RouterService::new(serve(api, || async {
+        Ok::<_, ServerError>(sse_keep_alive(
+            SourceStream::new(futures_util::stream::pending()),
+            Duration::from_millis(1),
+        ))
+    }));
+
+    let req = http::Request::builder()
+        .method("GET")
+        .uri("/events")
+        .header("accept", "text/event-stream")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let resp = svc.handle(req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    let mut body = resp.into_body();
+    let frame = tokio::time::timeout(Duration::from_millis(100), body.frame())
+        .await
+        .expect("SSE keep-alive should arrive promptly")
+        .expect("stream body should still be open")
+        .expect("stream frame should be successful");
+    assert_eq!(frame.data_ref().unwrap().as_ref(), b": keep-alive\n\n");
 }
 
 #[tokio::test]

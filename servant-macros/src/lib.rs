@@ -9,7 +9,16 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Type, parse_macro_input};
+use syn::{
+    Data,
+    DeriveInput,
+    Fields,
+    GenericArgument,
+    PathArguments,
+    Type,
+    parse_macro_input,
+    parse_quote,
+};
 
 /// Derive `into_api()` (a right-nested `Alt` of the fields, in declaration
 /// order) and a companion `<Name>Handlers` record with `into_handlers()` (the
@@ -89,13 +98,13 @@ pub fn derive_named_api(input: TokenStream) -> TokenStream {
 }
 
 /// Derive an OpenAPI object schema for a struct (for `servant-openapi`).
-/// Each field becomes a property (its schema from its Rust type name); non-`Option`
-/// fields are `required`.
+/// Each field becomes a property using that field type's `ToSchema` impl;
+/// non-`Option` fields are `required`.
 #[proc_macro_derive(ToSchema)]
 pub fn derive_to_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-    let (impl_g, ty_g, where_g) = input.generics.split_for_impl();
+    let mut generics = input.generics.clone();
 
     let fields = match named_fields(&input.data) {
         Ok(f) => f,
@@ -109,25 +118,34 @@ pub fn derive_to_schema(input: TokenStream) -> TokenStream {
         let field_name = ident.to_string();
         match option_inner(&f.ty) {
             Some(inner) => {
+                generics
+                    .make_where_clause()
+                    .predicates
+                    .push(parse_quote!(#inner: ::servant_openapi::ToSchema));
                 props.push(quote! {
                     map.insert(
                         #field_name.to_string(),
-                        ::servant_openapi::schema_for(::std::any::type_name::<#inner>()),
+                        <#inner as ::servant_openapi::ToSchema>::schema(),
                     );
                 });
             }
             None => {
                 let ty = &f.ty;
+                generics
+                    .make_where_clause()
+                    .predicates
+                    .push(parse_quote!(#ty: ::servant_openapi::ToSchema));
                 props.push(quote! {
                     map.insert(
                         #field_name.to_string(),
-                        ::servant_openapi::schema_for(::std::any::type_name::<#ty>()),
+                        <#ty as ::servant_openapi::ToSchema>::schema(),
                     );
                 });
                 required.push(quote!(#field_name));
             }
         }
     }
+    let (impl_g, ty_g, where_g) = generics.split_for_impl();
 
     let expanded = quote! {
         impl #impl_g ::servant_openapi::ToSchema for #name #ty_g #where_g {

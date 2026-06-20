@@ -1,7 +1,7 @@
 //! Mapping from Rust `type_name`s (as carried by the shared
-//! [`servant_docs`](servant_docs) model) to OpenAPI schema objects.
+//! [`servant_docs`] model) to OpenAPI schema objects.
 //!
-//! **[diff]** Haskell servant-swagger derives a full JSON Schema for every type
+//! **\[diff\]** Haskell servant-swagger derives a full JSON Schema for every type
 //! via `ToSchema`. The servant-rs documentation model only carries the Rust
 //! [`std::any::type_name`] string for captures, query parameters, bodies, and
 //! responses — not a structural schema. So this module performs a deliberately
@@ -9,20 +9,18 @@
 //! anything looking like a sequence maps to an untyped array, and everything
 //! else maps to a generic `object` carrying the short type name as its `title`.
 //!
-//! This is intentionally a placeholder for a future derive-based schema layer
-//! (see [`ToSchema`]); it keeps the generated document valid and useful without
-//! requiring every documented type to opt in to schema reflection.
+//! Derived [`ToSchema`] implementations can now produce structural schemas for
+//! nested objects and collections, while [`schema_for`] remains the fallback for
+//! the docs model's existing type-name-only paths.
 
 use serde_json::{Value, json};
 
 /// A type that can describe itself as an OpenAPI schema object.
 ///
-/// **[diff]** This mirrors the role of Haskell servant-swagger's `ToSchema`,
-/// but the servant-rs docs model does not yet thread `ToSchema` bounds through
-/// the combinator chain — the generator works purely from `type_name` strings
-/// (see [`schema_for`]). The trait is provided so primitives have a single
-/// source of truth and so a future derive can extend the mapping without
-/// changing the generator. Most callers should prefer [`schema_for`].
+/// **\[diff\]** This mirrors the role of Haskell servant-swagger's `ToSchema`.
+/// The OpenAPI route generator still receives plain type-name strings from the
+/// docs model, but derive users can call this trait directly for structural
+/// nested schemas and collections.
 pub trait ToSchema {
     /// The OpenAPI schema object describing `Self`.
     fn schema() -> Value;
@@ -53,6 +51,30 @@ impl_to_schema!(f64 => json!({ "type": "number" }));
 impl_to_schema!(bool => json!({ "type": "boolean" }));
 impl_to_schema!(String => json!({ "type": "string" }));
 impl_to_schema!(&str => json!({ "type": "string" }));
+
+impl<T: ToSchema> ToSchema for Option<T> {
+    fn schema() -> Value {
+        let mut schema = T::schema();
+        if let Some(obj) = schema.as_object_mut() {
+            obj.insert("nullable".to_string(), json!(true));
+            schema
+        } else {
+            json!({ "nullable": true, "allOf": [schema] })
+        }
+    }
+}
+
+impl<T: ToSchema> ToSchema for Vec<T> {
+    fn schema() -> Value {
+        json!({ "type": "array", "items": T::schema() })
+    }
+}
+
+impl<T: ToSchema, const N: usize> ToSchema for [T; N] {
+    fn schema() -> Value {
+        json!({ "type": "array", "items": T::schema(), "minItems": N, "maxItems": N })
+    }
+}
 
 /// Strip a fully-qualified Rust path (`alloc::string::String`,
 /// `my_crate::model::User`) down to its last `::` segment, dropping any generic
@@ -160,5 +182,23 @@ mod tests {
         assert_eq!(<u64 as ToSchema>::schema(), schema_for("u64"));
         assert_eq!(<String as ToSchema>::schema(), schema_for("String"));
         assert_eq!(<bool as ToSchema>::schema(), schema_for("bool"));
+    }
+
+    #[test]
+    fn collection_to_schema_is_structural() {
+        assert_eq!(
+            <Vec<u64> as ToSchema>::schema(),
+            json!({
+                "type": "array",
+                "items": { "type": "integer" }
+            })
+        );
+        assert_eq!(
+            <Option<String> as ToSchema>::schema(),
+            json!({
+                "type": "string",
+                "nullable": true
+            })
+        );
     }
 }

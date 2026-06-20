@@ -23,7 +23,7 @@ pub trait AllMime {
 /// negotiation.
 pub trait AllMimeRender<A>: AllMime {
     /// Render `value` using the codec that owns the `idx`-th media type (the
-    /// index returned by [`negotiate_media_index`] against [`AllMime::all_media_types`]).
+    /// index returned by `negotiate_media_index` against [`AllMime::all_media_types`]).
     fn render_index(value: &A, idx: usize) -> Result<Bytes, String>;
 
     /// Render `value` in the primary (first) content type, returning its media

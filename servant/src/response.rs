@@ -8,7 +8,7 @@
 //!
 //! Unlike Haskell's type-indexed `Headers '[Header "X" T] a`, the header set here
 //! is dynamic (a `Vec`), which keeps the response combinator a single type and
-//! avoids type-level header lists — an intentional simplification. **[diff]**
+//! avoids type-level header lists — an intentional simplification. **\[diff\]**
 
 use http::{HeaderName, HeaderValue};
 

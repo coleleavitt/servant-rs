@@ -63,7 +63,8 @@ pub struct CaptureAll<A, Next> {
 }
 
 /// A query parameter parsed as `A` (`QueryParam' mods "k" A :>`). `P` is
-/// presence (default [`Optional`]), `S` is strictness (default [`Strict`]).
+/// presence (default [`crate::modifiers::Optional`]), `S` is strictness (default
+/// [`crate::modifiers::Strict`]).
 pub struct QueryParam<A, P, S, Next> {
     /// The query key.
     pub name: String,

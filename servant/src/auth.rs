@@ -7,7 +7,7 @@
 //! differs in type from what a client would send (*credentials*), and this
 //! crate shares one argument list between server and client, `BasicAuth`
 //! endpoints are server + docs + links only — they are not part of a generated
-//! typed client. **[diff]**
+//! typed client. **\[diff\]**
 
 /// Decoded `Basic` credentials from the `Authorization` header.
 #[derive(Debug, Clone, PartialEq, Eq)]

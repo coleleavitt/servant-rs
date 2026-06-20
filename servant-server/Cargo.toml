@@ -17,17 +17,21 @@ mime.workspace = true
 percent-encoding.workspace = true
 base64.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 pin-project-lite.workspace = true
 tower-service.workspace = true
 hyper = { workspace = true, optional = true }
 hyper-util = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 
 [features]
 default = ["hyper"]
 hyper = ["dep:hyper", "dep:hyper-util", "dep:tokio"]
+rustls = ["hyper", "dep:rustls", "dep:tokio-rustls"]
 
 [dev-dependencies]
 tokio = { workspace = true }
@@ -37,6 +41,7 @@ http-body-util.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 proptest.workspace = true
+rcgen.workspace = true
 criterion.workspace = true
 servant-client.workspace = true
 servant-docs.workspace = true
@@ -46,3 +51,7 @@ trybuild.workspace = true
 [[bench]]
 name = "dispatch"
 harness = false
+
+[[test]]
+name = "tls"
+required-features = ["rustls"]

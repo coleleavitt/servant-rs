@@ -14,7 +14,7 @@
 //! - [`http_data`] — scalar URL/header rendering and parsing;
 //! - [`error`] — the structured [`error::ServerError`];
 //! - [`link`] — the link value model and escaping;
-//! - [`hlist`] / [`func`] — the heterogeneous argument list and the
+//! - [`mod@hlist`] / [`func`] — the heterogeneous argument list and the
 //!   tuple-to-positional handler bridge.
 //!
 //! See `docs/DESIGN.md` for the full architecture and intentional differences
@@ -99,11 +99,22 @@ pub mod prelude {
     pub use crate::modifiers::{Lenient, Optional, ParseError, Required, Strict};
     pub use crate::response::Headers;
     pub use crate::stream::{
+        EventStreamFraming,
         NetstringFraming,
         NewlineFraming,
         NoFraming,
         ServerEvent,
         SourceStream,
     };
-    pub use crate::uverb::{Union2, Union3, Union4, WithStatus, WithStatusHeaders};
+    pub use crate::uverb::{
+        HeaderError,
+        Union2,
+        Union3,
+        Union4,
+        WithFixedStatus,
+        WithStatus,
+        WithStatusHeaders,
+        WithStatusNoBody,
+        WithStreamingStatus,
+    };
 }

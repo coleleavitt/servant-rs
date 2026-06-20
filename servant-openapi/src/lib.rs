@@ -23,12 +23,12 @@
 //!
 //! Haskell servant-swagger derives a full JSON Schema for every type. The
 //! servant-rs documentation model only carries Rust [`std::any::type_name`]
-//! strings, so this crate maps those names to OpenAPI schemas with the small,
-//! name-based [`schema_for`] helper (primitives → their primitive schema,
-//! sequences → untyped arrays, everything else → a titled `object`). There is
-//! no `components/schemas` section yet; a future derive-driven [`ToSchema`]
-//! layer can extend the mapping without changing the generator. See
-//! [`schema`] and `docs/DESIGN.md`.
+//! strings, so route generation maps those names to OpenAPI schemas with the
+//! small, name-based [`schema_for`] helper (primitives → their primitive schema,
+//! sequences → untyped arrays, everything else → a titled `object`). Direct
+//! [`ToSchema`] users can derive nested structural schemas for request/response
+//! models; there is no shared `components/schemas` section yet. See [`schema`]
+//! and `docs/DESIGN.md`.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

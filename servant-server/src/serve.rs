@@ -144,7 +144,7 @@ impl<M, const STATUS: u16, Framing, CType, T> RouterShape
 /// Bind an API description and matching handler(s) into a [`Router`].
 ///
 /// For a single endpoint, `H` is the handler closure (its parameters are checked
-/// against the endpoint's [`Endpoint::Args`]); for [`Alt`], `H` is a
+/// against the endpoint's [`servant::api::HasArgs::Args`]); for [`Alt`], `H` is a
 /// `(left, right)` handler pair mirroring the API's structure.
 pub trait HasServer<H> {
     /// Produce the router, given the shared server context.

@@ -14,7 +14,7 @@ use servant::error::ServerError;
 use servant::hlist::HNil;
 use servant::method::MethodMarker;
 use servant::stream::{Framing, SourceStream};
-use servant::uverb::UnionResponse;
+use servant::uverb::{ArmBody, UnionResponse};
 
 use super::chain::{Rendered, ServerChain};
 use super::state::ExtractState;
@@ -149,9 +149,7 @@ where
     }
     fn render(&self, accept: Option<&str>, value: Resp) -> Rendered {
         match value.render_union(accept) {
-            Ok((status, mime, body, headers)) => {
-                (status, mime, crate::response::full_body(body), headers)
-            }
+            Ok((status, mime, body, headers)) => (status, mime, union_body(body), headers),
             Err(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 None,
@@ -162,6 +160,24 @@ where
     }
     fn extract(&self, _st: &mut ExtractState<'_>) -> RouteResult<HNil> {
         RouteResult::Route(HNil)
+    }
+}
+
+fn union_body(body: ArmBody) -> crate::response::ResponseBody {
+    match body {
+        ArmBody::Full(bytes) => crate::response::full_body(bytes),
+        ArmBody::Stream(stream) => {
+            use futures_util::StreamExt;
+            use http_body::Frame;
+            use http_body_util::{BodyExt, StreamBody};
+
+            let framed = stream.map(|chunk| {
+                chunk
+                    .map(Frame::data)
+                    .map_err(|e| -> crate::response::BoxError { std::io::Error::other(e).into() })
+            });
+            BodyExt::boxed_unsync(StreamBody::new(framed))
+        }
     }
 }
 

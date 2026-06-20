@@ -2,7 +2,7 @@
 //!
 //! The response body is a boxed [`http_body::Body`] so an endpoint can return
 //! either a fully-buffered body ([`full_body`]) or a streaming one
-//! ([`crate::stream`]).
+//! ([`servant::stream`]).
 
 use bytes::Bytes;
 use http::header::CONTENT_TYPE;

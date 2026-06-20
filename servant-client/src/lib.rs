@@ -1,6 +1,6 @@
 //! `servant-client` — typed HTTP clients generated from a servant-rs API.
 //!
-//! [`client`] walks the **same** [`servant`] API description the server routes
+//! [`client()`] walks the **same** [`servant`] API description the server routes
 //! on, producing a [`ClientEndpoint`] per endpoint (or a nested tuple mirroring
 //! `Alt`). Calling an endpoint builds a [`ClientRequest`] from the same `Args`
 //! HList the server consumes — so client and server can never disagree about an
@@ -31,4 +31,4 @@ pub use client::{ClientEndpoint, HasClient, MakeClient, client};
 pub use request::{BaseUrl, ClientError, ClientRequest, ClientResponse, Scheme};
 #[cfg(feature = "hyper")]
 pub use runclient::HyperClient;
-pub use runclient::RunClient;
+pub use runclient::{RunClient, RunStreamingClient, StreamingResponse};

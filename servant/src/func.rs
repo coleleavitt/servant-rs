@@ -1,7 +1,7 @@
 //! Calling an ordinary closure with arguments supplied as an [`HList`].
 //!
 //! [`HandlerFn`] bridges the heterogeneous argument list accumulated while
-//! walking the API description (see [`crate::hlist`]) to a normal positional
+//! walking the API description (see [`mod@crate::hlist`]) to a normal positional
 //! function call. A blanket impl is generated for every closure arity from 0 up
 //! to [`MAX_ARITY`]; each impl destructures the exact `HCons` shape for that
 //! arity and forwards to `Fn(A0, A1, ...)`.

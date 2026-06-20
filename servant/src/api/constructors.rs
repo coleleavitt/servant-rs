@@ -140,7 +140,7 @@ pub fn stream_verb<M, const STATUS: u16, Framing, CType, T>()
 pub fn sse_get() -> StreamVerb<
     crate::method::Get,
     200,
-    crate::stream::NoFraming,
+    crate::stream::EventStreamFraming,
     crate::content::EventStream,
     crate::stream::ServerEvent,
 > {
@@ -171,7 +171,7 @@ pub fn alt<L, R>(left: L, right: R) -> Alt<L, R> {
 
 /// Combine N endpoints into a right-nested [`Alt`] tree (the analogue of
 /// Servant's named-routes record): `alt_all![a, b, c]` ≡ `alt(a, alt(b, c))`.
-/// Pair it with [`handlers!`] — both nest identically, so the handler tuple
+/// Pair it with [`crate::handlers!`] — both nest identically, so the handler tuple
 /// always matches the API structure regardless of how many routes there are.
 #[macro_export]
 macro_rules! alt_all {

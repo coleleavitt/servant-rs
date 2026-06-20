@@ -1,6 +1,8 @@
 /target/
 /research/
 /.codegraph/
+/.junie/
+/.omo/
 /CLAUDE.local.md
 
 !/.claude/
