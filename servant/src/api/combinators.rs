@@ -90,6 +90,16 @@ pub struct QueryFlag<Next> {
     pub next: Next,
 }
 
+/// Capture the entire query string as [`crate::query::Query`].
+///
+/// Unlike [`QueryParam`] and [`QueryParams`], this combinator is for dynamic
+/// query shapes. It preserves the decoded ordered pairs and, on server input,
+/// the original raw query string.
+pub struct QueryString<Next> {
+    /// The rest of the API.
+    pub next: Next,
+}
+
 /// A request header parsed as `A` (`Header' mods "H" A :>`). Same modifier
 /// defaults as [`QueryParam`].
 pub struct Header<A, P, S, Next> {
@@ -249,6 +259,7 @@ impl<A, Next> sealed::Sealed for CaptureAll<A, Next> {}
 impl<A, P, S, Next> sealed::Sealed for QueryParam<A, P, S, Next> {}
 impl<A, Next> sealed::Sealed for QueryParams<A, Next> {}
 impl<Next> sealed::Sealed for QueryFlag<Next> {}
+impl<Next> sealed::Sealed for QueryString<Next> {}
 impl<A, P, S, Next> sealed::Sealed for Header<A, P, S, Next> {}
 impl<CTypes, A, S, Next> sealed::Sealed for ReqBody<CTypes, A, S, Next> {}
 impl<L, R> sealed::Sealed for Alt<L, R> {}

@@ -1,7 +1,8 @@
 use super::*;
-use crate::api::{alt, capture, fragment, get, path, query_flag, query_param};
+use crate::api::{alt, capture, fragment, get, path, query_flag, query_param, query_string};
 use crate::content::Json;
 use crate::hlist::{HCons, HNil, hlist1};
+use crate::query::Query;
 
 #[test]
 fn builds_link_for_capture_endpoint() {
@@ -66,4 +67,43 @@ fn fragment_safe_link_escapes_fragment_marker() {
     let ep = links(api);
     let link = ep.link(hlist1("intro#details".to_string()));
     assert_eq!(link.to_uri(), "/article#intro%23details");
+}
+
+#[test]
+fn query_string_link_replaces_previous_query_and_preserves_raw() {
+    let api = path(
+        "search",
+        query_param::<String, _>("old", query_string(get::<(Json,), u64>())),
+    );
+    let ep = links(api);
+    let link = ep.link(crate::hlist![
+        Some("gone".to_string()),
+        Query::from_raw(
+            "name=bob&encoded=%40",
+            vec![
+                ("name".to_string(), Some("bob".to_string())),
+                ("encoded".to_string(), Some("@".to_string())),
+            ],
+        )
+    ]);
+
+    assert_eq!(link.to_uri(), "/search?name=bob&encoded=%40");
+}
+
+#[test]
+fn query_string_link_appends_later_query_combinators() {
+    let api = path(
+        "search",
+        query_string(query_flag("debug", get::<(Json,), u64>())),
+    );
+    let ep = links(api);
+    let link = ep.link(crate::hlist![
+        Query::from_raw(
+            "encoded=%40",
+            vec![("encoded".to_string(), Some("@".to_string()))],
+        ),
+        true
+    ]);
+
+    assert_eq!(link.to_uri(), "/search?encoded=%40&debug");
 }

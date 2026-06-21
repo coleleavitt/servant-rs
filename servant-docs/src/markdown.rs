@@ -8,9 +8,10 @@
 //! 2. Captures,
 //! 3. Headers,
 //! 4. Query parameters,
-//! 5. Fragment,
-//! 6. Request (content types),
-//! 7. Response (status + content types).
+//! 5. Query string,
+//! 6. Fragment,
+//! 7. Request (content types),
+//! 8. Response (status + content types).
 //!
 //! **[diff]** Endpoints are rendered in API (left-to-right) order rather than
 //! Servant's sort-by-`(path, method)`, matching how the rest of the workspace
@@ -55,6 +56,7 @@ fn render_endpoint(ep: &EndpointDoc, lines: &mut Vec<String>) {
     render_captures(ep, lines);
     render_headers(ep, lines);
     render_params(ep, lines);
+    render_query_string(ep, lines);
     render_fragment(ep, lines);
     render_request(ep, lines);
     render_response(ep, lines);
@@ -154,6 +156,19 @@ fn render_fragment(ep: &EndpointDoc, lines: &mut Vec<String>) {
         short_type_name(fragment.type_name),
         fragment.description
     ));
+    lines.push(String::new());
+}
+
+fn render_query_string(ep: &EndpointDoc, lines: &mut Vec<String>) {
+    if ep.query_string.is_none() {
+        return;
+    }
+    lines.push("### Query String:".to_string());
+    lines.push(String::new());
+    lines.push(
+        "- Captures the raw query string when available and decoded ordered query pairs."
+            .to_string(),
+    );
     lines.push(String::new());
 }
 

@@ -68,6 +68,11 @@ pub fn query_flag<Next>(name: impl Into<String>, next: Next) -> QueryFlag<Next> 
     }
 }
 
+/// `QueryString :>` — the full query string as [`crate::query::Query`].
+pub fn query_string<Next>(next: Next) -> QueryString<Next> {
+    QueryString { next }
+}
+
 /// `Header "name" A :>` — optional, strict by default.
 pub fn header<A, Next>(name: impl Into<String>, next: Next) -> Header<A, Optional, Strict, Next> {
     Header {

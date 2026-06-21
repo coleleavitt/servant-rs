@@ -82,6 +82,7 @@ impl RouterService {
             is_head: parts.method == http::Method::HEAD,
             method: parts.method.clone(),
             query: parse_query(parts.uri.query()),
+            raw_query: parts.uri.query().map(str::to_owned),
             headers: parts.headers.clone(),
             body: body_bytes,
             version: parts.version,

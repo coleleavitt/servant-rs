@@ -214,6 +214,16 @@ fn operation_for(endpoint: &EndpointDoc) -> Value {
         op.insert("parameters".into(), Value::Array(parameters));
     }
 
+    if endpoint.query_string.is_some() {
+        op.insert(
+            "x-servant-query-string".into(),
+            json!({
+                "decodedOrderedPairs": true,
+                "rawQuery": "available",
+            }),
+        );
+    }
+
     if let Some(body) = &endpoint.request_body {
         op.insert("requestBody".into(), request_body_for(body));
     }

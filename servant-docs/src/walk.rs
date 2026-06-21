@@ -40,6 +40,7 @@ use servant::api::{
     QueryFlag,
     QueryParam,
     QueryParams,
+    QueryString,
     ReqBody,
     Summary,
     Verb,
@@ -47,7 +48,16 @@ use servant::api::{
 use servant::content::AllMime;
 use servant::method::MethodMarker;
 
-use crate::model::{ApiDoc, BodyDoc, EndpointDoc, FragmentDoc, ParamDoc, ParamKind, PathPart};
+use crate::model::{
+    ApiDoc,
+    BodyDoc,
+    EndpointDoc,
+    FragmentDoc,
+    ParamDoc,
+    ParamKind,
+    PathPart,
+    QueryStringDoc,
+};
 
 mod server;
 
@@ -229,6 +239,16 @@ impl<Next: HasDocs> HasDocs for QueryFlag<Next> {
             name: self.name.clone(),
             kind: ParamKind::Flag,
             type_name: "",
+        });
+        self.next.docs_walk(acc)
+    }
+}
+
+impl<Next: HasDocs> HasDocs for QueryString<Next> {
+    fn docs_walk(&self, mut acc: EndpointDoc) -> ApiDoc {
+        acc.query_string = Some(QueryStringDoc {
+            decoded_ordered_pairs: true,
+            raw_query_available: true,
         });
         self.next.docs_walk(acc)
     }

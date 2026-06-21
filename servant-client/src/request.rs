@@ -5,6 +5,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderName, Method, StatusCode};
 use mime::Mime;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use servant::query::{Query, render_pairs};
 
 const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
@@ -21,6 +22,8 @@ pub struct ClientRequest {
     pub segments: Vec<String>,
     /// Ordered query parameters; `None` value renders as a bare key.
     pub query: Vec<(String, Option<String>)>,
+    /// Raw query prefix set by `QueryString`; later query combinators append.
+    pub raw_query: Option<String>,
     /// Request headers.
     pub headers: HeaderMap,
     /// Acceptable response media types, in preference order.
@@ -36,6 +39,7 @@ impl ClientRequest {
             method: Method::GET,
             segments: Vec::new(),
             query: Vec::new(),
+            raw_query: None,
             headers: HeaderMap::new(),
             accept: Vec::new(),
             body: None,
@@ -53,6 +57,17 @@ impl ClientRequest {
         self.query.push((name.to_owned(), value));
     }
 
+    /// Replace the full query string.
+    pub fn set_query_string(&mut self, query: Query) {
+        let (raw, pairs) = query.into_parts();
+        self.raw_query = raw;
+        self.query = if self.raw_query.is_some() {
+            Vec::new()
+        } else {
+            pairs
+        };
+    }
+
     /// Append a header value (allowing duplicates).
     pub fn add_header(&mut self, name: HeaderName, value: http::HeaderValue) {
         self.headers.append(name, value);
@@ -67,21 +82,15 @@ impl ClientRequest {
     pub fn target(&self) -> String {
         let mut out = String::from("/");
         out.push_str(&self.segments.join("/"));
-        if !self.query.is_empty() {
+        if self.raw_query.is_some() || !self.query.is_empty() {
             out.push('?');
-            let parts: Vec<String> = self
-                .query
-                .iter()
-                .map(|(k, v)| match v {
-                    Some(val) => format!(
-                        "{}={}",
-                        utf8_percent_encode(k, PATH_SEGMENT),
-                        utf8_percent_encode(val, PATH_SEGMENT)
-                    ),
-                    None => utf8_percent_encode(k, PATH_SEGMENT).to_string(),
-                })
-                .collect();
-            out.push_str(&parts.join("&"));
+            if let Some(raw) = &self.raw_query {
+                out.push_str(raw);
+                if !raw.is_empty() && !self.query.is_empty() {
+                    out.push('&');
+                }
+            }
+            out.push_str(&render_pairs(&self.query));
         }
         out
     }

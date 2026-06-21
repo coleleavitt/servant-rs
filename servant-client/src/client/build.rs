@@ -13,6 +13,7 @@ use servant::api::{
     QueryFlag,
     QueryParam,
     QueryParams,
+    QueryString,
     ReqBody,
     Summary,
 };
@@ -20,6 +21,7 @@ use servant::content::{AllMime, AllMimeRender};
 use servant::hlist::HCons;
 use servant::http_data::ToHttpApiData;
 use servant::modifiers::{ArgShape, CaptureShape, Required};
+use servant::query::Query;
 
 use super::endpoint::HasClient;
 use crate::request::{ClientError, ClientRequest, ClientResponse};
@@ -159,6 +161,19 @@ where
         if head {
             req.append_query(&self.name, None);
         }
+        self.next.build_request(tail, req)
+    }
+    forward_decode!();
+}
+
+impl<Next> HasClient for QueryString<Next>
+where
+    Next: HasClient,
+    Self: Endpoint<Args = HCons<Query, Next::Args>, Output = Next::Output>,
+{
+    fn build_request(&self, args: Self::Args, req: &mut ClientRequest) -> Result<(), String> {
+        let HCons { head, tail } = args;
+        req.set_query_string(head);
         self.next.build_request(tail, req)
     }
     forward_decode!();

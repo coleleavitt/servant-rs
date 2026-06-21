@@ -28,6 +28,7 @@ use crate::api::{
     QueryFlag,
     QueryParam,
     QueryParams,
+    QueryString,
     RemoteHost,
     ReqBody,
     Summary,
@@ -40,6 +41,7 @@ use crate::hlist::{HCons, HList, HNil};
 use crate::http_data::ToHttpApiData;
 use crate::link::{Link, Param};
 use crate::modifiers::{ArgShape, CaptureShape};
+use crate::query::Query;
 
 /// Walk an endpoint, contributing its path segments and query parameters to a
 /// [`Link`]. The `LinkArgs` HList omits header/body arguments.
@@ -157,6 +159,15 @@ impl<Next: HasLink> HasLink for QueryFlag<Next> {
         if head {
             link.add_query(Param::Flag(self.name.clone()));
         }
+        self.next.add_to_link(tail, link);
+    }
+}
+
+impl<Next: HasLink> HasLink for QueryString<Next> {
+    type LinkArgs = HCons<Query, Next::LinkArgs>;
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+        let HCons { head, tail } = args;
+        link.set_query_string(head);
         self.next.add_to_link(tail, link);
     }
 }

@@ -36,7 +36,16 @@ mod model;
 mod walk;
 
 pub use markdown::markdown;
-pub use model::{ApiDoc, BodyDoc, EndpointDoc, FragmentDoc, ParamDoc, ParamKind, PathPart};
+pub use model::{
+    ApiDoc,
+    BodyDoc,
+    EndpointDoc,
+    FragmentDoc,
+    ParamDoc,
+    ParamKind,
+    PathPart,
+    QueryStringDoc,
+};
 pub use walk::HasDocs;
 
 #[cfg(test)]
@@ -279,5 +288,21 @@ mod tests {
 
         let md = markdown(&doc);
         assert!(md.contains("OperationId: getArticle"), "md:\n{md}");
+    }
+
+    #[test]
+    fn query_string_metadata_is_recorded_in_docs_model_and_markdown() {
+        let api = path("search", query_string(get::<(Json,), User>()));
+        let doc = api.docs();
+        let ep = &doc.endpoints()[0];
+
+        assert!(ep.query_string.is_some());
+
+        let md = markdown(&doc);
+        assert!(md.contains("### Query String:"), "md:\n{md}");
+        assert!(
+            md.contains("decoded ordered query pairs"),
+            "query-string note missing:\n{md}"
+        );
     }
 }

@@ -92,6 +92,15 @@ pub struct FragmentDoc {
     pub description: String,
 }
 
+/// Query-string capture metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryStringDoc {
+    /// Whether decoded ordered pairs are available to the handler.
+    pub decoded_ordered_pairs: bool,
+    /// Whether the original raw query string is available when supplied.
+    pub raw_query_available: bool,
+}
+
 /// A single fully-resolved endpoint: a path/extractor chain ending in a verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointDoc {
@@ -117,6 +126,8 @@ pub struct EndpointDoc {
     pub operation_id: Option<String>,
     /// Optional URI fragment metadata (`Fragment`).
     pub fragment: Option<FragmentDoc>,
+    /// Optional full query-string capture metadata (`QueryString`).
+    pub query_string: Option<QueryStringDoc>,
 }
 
 impl EndpointDoc {
@@ -135,6 +146,7 @@ impl EndpointDoc {
             description: None,
             operation_id: None,
             fragment: None,
+            query_string: None,
         }
     }
 
@@ -174,6 +186,9 @@ impl EndpointDoc {
         }
         if self.fragment.is_none() {
             self.fragment = other.fragment;
+        }
+        if self.query_string.is_none() {
+            self.query_string = other.query_string;
         }
     }
 }

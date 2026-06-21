@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use http::{Extensions, HeaderMap, Method};
+use servant::query::Query;
 use servant::redact::is_sensitive_header;
 
 /// Request-global data shared by every candidate route during dispatch.
@@ -21,6 +22,8 @@ pub struct RequestData {
     /// Parsed, percent-decoded query parameters in order. `None` value means a
     /// key with no `=` (e.g. `?flag`).
     pub query: Vec<(String, Option<String>)>,
+    /// The raw query string from the request URI, without the leading `?`.
+    pub raw_query: Option<String>,
     /// Request headers.
     pub headers: HeaderMap,
     /// The fully-buffered request body.
@@ -57,6 +60,7 @@ impl std::fmt::Debug for RequestData {
             .field("method", &self.method)
             .field("is_head", &self.is_head)
             .field("query", &self.query)
+            .field("raw_query", &self.raw_query.as_ref().map(|_| "<present>"))
             .field("headers", &headers)
             .field("body_len", &self.body.len())
             .finish()
@@ -93,28 +97,11 @@ pub fn path_segments(path: &str) -> Vec<String> {
 /// percent-escapes and `+` (form convention, matching Servant's
 /// `parseQueryText`). A key without `=` yields `None`.
 pub fn parse_query(query: Option<&str>) -> Vec<(String, Option<String>)> {
-    let Some(q) = query else {
-        return Vec::new();
-    };
-    q.split('&')
-        .filter(|p| !p.is_empty())
-        .map(|pair| match pair.split_once('=') {
-            Some((k, v)) => (query_decode(k), Some(query_decode(v))),
-            None => (query_decode(pair), None),
-        })
-        .collect()
+    Query::parse(query).pairs().to_vec()
 }
 
 fn percent_decode(s: &str) -> String {
     percent_encoding::percent_decode_str(s)
-        .decode_utf8_lossy()
-        .into_owned()
-}
-
-fn query_decode(s: &str) -> String {
-    // `+` denotes a space in query components (form-url semantics).
-    let spaced = s.replace('+', " ");
-    percent_encoding::percent_decode_str(&spaced)
         .decode_utf8_lossy()
         .into_owned()
 }
@@ -146,6 +133,15 @@ mod tests {
         assert_eq!(
             parse_query(Some("k=%40")),
             vec![("k".into(), Some("@".into()))]
+        );
+        assert_eq!(
+            servant::query::parse_pairs("flag&empty=&bad=%ZZ&plus=a+b"),
+            vec![
+                ("flag".into(), None),
+                ("empty".into(), Some(String::new())),
+                ("bad".into(), Some("%ZZ".into())),
+                ("plus".into(), Some("a b".into())),
+            ]
         );
     }
 }

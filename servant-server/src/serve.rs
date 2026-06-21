@@ -25,6 +25,7 @@ use servant::api::{
     QueryFlag,
     QueryParam,
     QueryParams,
+    QueryString,
     RemoteHost,
     ReqBody,
     Summary,
@@ -95,6 +96,7 @@ macro_rules! forward_shape {
 }
 forward_shape!(QueryParam<A, P, S>);
 forward_shape!(QueryParams<A>);
+forward_shape!(QueryString);
 forward_shape!(Header<A, P, S>);
 forward_shape!(ReqBody<CTypes, A, S>);
 forward_shape!(Fragment<A>);

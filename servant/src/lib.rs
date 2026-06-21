@@ -33,6 +33,7 @@ pub mod http_data;
 pub mod link;
 pub mod method;
 pub mod modifiers;
+pub mod query;
 pub mod redact;
 pub mod response;
 pub mod stream;
@@ -68,6 +69,7 @@ pub mod prelude {
         query_flag,
         query_param,
         query_params,
+        query_string,
         remote_host,
         req_body,
         sse_get,
@@ -99,6 +101,7 @@ pub mod prelude {
     pub use crate::http_data::{FromHttpApiData, ToHttpApiData};
     pub use crate::method::{Delete, Get, Patch, Post, Put};
     pub use crate::modifiers::{Lenient, Optional, ParseError, Required, Strict};
+    pub use crate::query::Query;
     pub use crate::response::Headers;
     pub use crate::stream::{
         EventStreamFraming,

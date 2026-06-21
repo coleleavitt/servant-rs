@@ -7,6 +7,8 @@
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
+use crate::query::{Query, render_pairs};
+
 /// Characters that do **not** need percent-encoding in a path/query component:
 /// the RFC 3986 unreserved set (`ALPHA` / `DIGIT` / `-` `_` `.` `~`).
 const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
@@ -63,6 +65,7 @@ pub enum ArrayElementStyle {
 pub struct Link {
     segments: Vec<Escaped>,
     query: Vec<Param>,
+    raw_query: Option<String>,
     fragment: Option<String>,
 }
 
@@ -85,6 +88,20 @@ impl Link {
     /// Append a query parameter.
     pub fn add_query(&mut self, param: Param) {
         self.query.push(param);
+    }
+
+    /// Replace the full query string.
+    pub fn set_query_string(&mut self, query: Query) {
+        let (raw, pairs) = query.into_parts();
+        self.raw_query = raw;
+        self.query.clear();
+        if self.raw_query.is_none() {
+            self.query
+                .extend(pairs.into_iter().map(|(key, value)| match value {
+                    Some(value) => Param::Single(key, value),
+                    None => Param::Flag(key),
+                }));
+        }
     }
 
     /// Set the URI fragment (the part after `#`).
@@ -132,23 +149,15 @@ impl Link {
                 .join("/"),
         );
 
-        if !self.query.is_empty() {
+        if self.raw_query.is_some() || !self.query.is_empty() {
             out.push('?');
-            let parts: Vec<String> = self
-                .query
-                .iter()
-                .map(|p| match p {
-                    Param::Single(k, v) => {
-                        format!("{}={}", encode(k), encode(v))
-                    }
-                    Param::ArrayElem(k, v) => match style {
-                        ArrayElementStyle::Bracket => format!("{}[]={}", encode(k), encode(v)),
-                        ArrayElementStyle::Plain => format!("{}={}", encode(k), encode(v)),
-                    },
-                    Param::Flag(k) => encode(k),
-                })
-                .collect();
-            out.push_str(&parts.join("&"));
+            if let Some(raw) = &self.raw_query {
+                out.push_str(raw);
+                if !raw.is_empty() && !self.query.is_empty() {
+                    out.push('&');
+                }
+            }
+            out.push_str(&render_params(&self.query, style));
         }
 
         if let Some(frag) = &self.fragment {
@@ -161,6 +170,35 @@ impl Link {
 
 fn encode(s: &str) -> String {
     utf8_percent_encode(s, COMPONENT).to_string()
+}
+
+fn render_params(params: &[Param], style: ArrayElementStyle) -> String {
+    let plain_pairs: Option<Vec<(String, Option<String>)>> = params
+        .iter()
+        .map(|param| match param {
+            Param::Single(key, value) => Some((key.clone(), Some(value.clone()))),
+            Param::Flag(key) => Some((key.clone(), None)),
+            Param::ArrayElem(_, _) => None,
+        })
+        .collect();
+
+    match plain_pairs {
+        Some(pairs) => render_pairs(&pairs),
+        None => params
+            .iter()
+            .map(|p| match p {
+                Param::Single(k, v) => {
+                    format!("{}={}", encode(k), encode(v))
+                }
+                Param::ArrayElem(k, v) => match style {
+                    ArrayElementStyle::Bracket => format!("{}[]={}", encode(k), encode(v)),
+                    ArrayElementStyle::Plain => format!("{}={}", encode(k), encode(v)),
+                },
+                Param::Flag(k) => encode(k),
+            })
+            .collect::<Vec<_>>()
+            .join("&"),
+    }
 }
 
 #[cfg(test)]

@@ -1,10 +1,11 @@
 use mime::Mime;
-use servant::api::{Endpoint, Header, QueryFlag, QueryParam, QueryParams, ReqBody};
+use servant::api::{Endpoint, Header, QueryFlag, QueryParam, QueryParams, QueryString, ReqBody};
 use servant::content::{AllMime, AllMimeUnrender, media_type_matches};
 use servant::error::ServerError;
 use servant::hlist::HCons;
 use servant::http_data::FromHttpApiData;
 use servant::modifiers::{ArgError, ArgShape, ParseError, Required};
+use servant::query::Query;
 
 use super::chain::{Rendered, ServerChain, bad_request, cons_tail};
 use super::state::ExtractState;
@@ -120,6 +121,31 @@ where
             })
             .unwrap_or(false);
         cons_tail(present, &self.next, st)
+    }
+}
+
+// --- QueryString ---
+
+impl<Next> ServerChain for QueryString<Next>
+where
+    Next: ServerChain,
+    Self: Endpoint<Args = HCons<Query, Next::Args>, Output = Next::Output>,
+{
+    fn validate_captures(
+        &self,
+        c: &[String],
+        i: &mut usize,
+        ca: &Option<Vec<String>>,
+    ) -> RouteResult<()> {
+        self.next.validate_captures(c, i, ca)
+    }
+    forward_response_checks!();
+    fn extract(&self, st: &mut ExtractState<'_>) -> RouteResult<Self::Args> {
+        cons_tail(
+            Query::from_parts(st.req.raw_query.clone(), st.req.query.clone()),
+            &self.next,
+            st,
+        )
     }
 }
 
