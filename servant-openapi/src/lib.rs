@@ -35,7 +35,14 @@
 mod openapi;
 pub mod schema;
 
-pub use openapi::{OpenApiInfo, openapi_for, to_openapi};
+pub use openapi::{
+    OpenApiError,
+    OpenApiInfo,
+    checked_openapi_for,
+    openapi_for,
+    to_checked_openapi,
+    to_openapi,
+};
 pub use schema::{ToSchema, schema_for};
 /// Derive [`ToSchema`] for a struct: each field becomes an OpenAPI property
 /// (schema inferred from its Rust type name); non-`Option` fields are required.

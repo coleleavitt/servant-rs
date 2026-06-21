@@ -83,6 +83,15 @@ pub struct BodyDoc {
     pub type_name: &'static str,
 }
 
+/// A documented URI fragment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FragmentDoc {
+    /// The Rust type rendered into the URI fragment.
+    pub type_name: &'static str,
+    /// Human-readable fragment description.
+    pub description: String,
+}
+
 /// A single fully-resolved endpoint: a path/extractor chain ending in a verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointDoc {
@@ -104,6 +113,10 @@ pub struct EndpointDoc {
     pub summary: Option<String>,
     /// An optional longer description (`Description`).
     pub description: Option<String>,
+    /// An optional stable OpenAPI operation identifier (`OperationId`).
+    pub operation_id: Option<String>,
+    /// Optional URI fragment metadata (`Fragment`).
+    pub fragment: Option<FragmentDoc>,
 }
 
 impl EndpointDoc {
@@ -120,6 +133,8 @@ impl EndpointDoc {
             response_types: Vec::new(),
             summary: None,
             description: None,
+            operation_id: None,
+            fragment: None,
         }
     }
 
@@ -153,6 +168,12 @@ impl EndpointDoc {
         }
         if self.description.is_none() {
             self.description = other.description;
+        }
+        if self.operation_id.is_none() {
+            self.operation_id = other.operation_id;
+        }
+        if self.fragment.is_none() {
+            self.fragment = other.fragment;
         }
     }
 }

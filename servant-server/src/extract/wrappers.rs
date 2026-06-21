@@ -4,8 +4,10 @@ use http::Extensions;
 use servant::api::{
     Description,
     Endpoint,
+    Fragment,
     HttpVersion,
     IsSecure,
+    OperationId,
     Path,
     RemoteHost,
     Summary,
@@ -43,6 +45,25 @@ where
 // --- Description / Summary (metadata) ---
 
 macro_rules! metadata_chain {
+    ($ty:ident < $($g:ident),+ >) => {
+        impl<$($g),+, Next: ServerChain> ServerChain for $ty<$($g),+, Next>
+        where
+            Self: Endpoint<Output = Next::Output, Args = Next::Args>,
+        {
+            fn validate_captures(
+                &self,
+                c: &[String],
+                i: &mut usize,
+                ca: &Option<Vec<String>>,
+            ) -> RouteResult<()> {
+                self.next.validate_captures(c, i, ca)
+            }
+            forward_response_checks!();
+            fn extract(&self, st: &mut ExtractState<'_>) -> RouteResult<Self::Args> {
+                self.next.extract(st)
+            }
+        }
+    };
     ($ty:ident) => {
         impl<Next: ServerChain> ServerChain for $ty<Next>
         where
@@ -65,6 +86,8 @@ macro_rules! metadata_chain {
 }
 metadata_chain!(Description);
 metadata_chain!(Summary);
+metadata_chain!(OperationId);
+metadata_chain!(Fragment<A>);
 
 // --- Vault (server-only; provides the request's Extensions) ---
 

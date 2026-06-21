@@ -8,8 +8,9 @@
 //! 2. Captures,
 //! 3. Headers,
 //! 4. Query parameters,
-//! 5. Request (content types),
-//! 6. Response (status + content types).
+//! 5. Fragment,
+//! 6. Request (content types),
+//! 7. Response (status + content types).
 //!
 //! **[diff]** Endpoints are rendered in API (left-to-right) order rather than
 //! Servant's sort-by-`(path, method)`, matching how the rest of the workspace
@@ -54,12 +55,13 @@ fn render_endpoint(ep: &EndpointDoc, lines: &mut Vec<String>) {
     render_captures(ep, lines);
     render_headers(ep, lines);
     render_params(ep, lines);
+    render_fragment(ep, lines);
     render_request(ep, lines);
     render_response(ep, lines);
 }
 
 fn render_notes(ep: &EndpointDoc, lines: &mut Vec<String>) {
-    if ep.summary.is_none() && ep.description.is_none() {
+    if ep.summary.is_none() && ep.description.is_none() && ep.operation_id.is_none() {
         return;
     }
     if let Some(summary) = &ep.summary {
@@ -68,6 +70,10 @@ fn render_notes(ep: &EndpointDoc, lines: &mut Vec<String>) {
     }
     if let Some(description) = &ep.description {
         lines.push(description.clone());
+        lines.push(String::new());
+    }
+    if let Some(operation_id) = &ep.operation_id {
+        lines.push(format!("OperationId: {operation_id}"));
         lines.push(String::new());
     }
 }
@@ -137,6 +143,20 @@ fn render_params(ep: &EndpointDoc, lines: &mut Vec<String>) {
     lines.push(String::new());
 }
 
+fn render_fragment(ep: &EndpointDoc, lines: &mut Vec<String>) {
+    let Some(fragment) = &ep.fragment else {
+        return;
+    };
+    lines.push("### Fragment:".to_string());
+    lines.push(String::new());
+    lines.push(format!(
+        "- *{}*: {}",
+        short_type_name(fragment.type_name),
+        fragment.description
+    ));
+    lines.push(String::new());
+}
+
 fn render_request(ep: &EndpointDoc, lines: &mut Vec<String>) {
     let Some(body) = &ep.request_body else {
         return;
@@ -150,6 +170,13 @@ fn render_request(ep: &EndpointDoc, lines: &mut Vec<String>) {
         lines.push(format!("    - `{ct}`"));
     }
     lines.push(String::new());
+}
+
+fn short_type_name(type_name: &str) -> &str {
+    match type_name.rsplit("::").next() {
+        Some(short) => short,
+        None => type_name,
+    }
 }
 
 fn render_response(ep: &EndpointDoc, lines: &mut Vec<String>) {

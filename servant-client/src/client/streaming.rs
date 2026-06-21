@@ -3,7 +3,9 @@ use servant::api::{
     CaptureAll,
     Description,
     Endpoint,
+    Fragment,
     Header,
+    OperationId,
     Path,
     QueryFlag,
     QueryParam,
@@ -89,6 +91,8 @@ forward_stream_info!(Header<A, P, S>);
 forward_stream_info!(ReqBody<CTypes, A, S>);
 forward_stream_info!(Description);
 forward_stream_info!(Summary);
+forward_stream_info!(OperationId);
+forward_stream_info!(Fragment<A>);
 
 /// De-frame and decode a streaming byte body into typed items.
 fn deframe_decode<Fr, CType, Item>(

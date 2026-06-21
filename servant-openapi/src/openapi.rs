@@ -11,6 +11,8 @@
 //! name-based [`crate::schema_for`] mapping and no `components` section is
 //! generated yet. See [`crate::schema`] for the rationale.
 
+use std::collections::BTreeSet;
+
 use serde_json::{Map, Value, json};
 use servant_docs::{ApiDoc, EndpointDoc, ParamKind, PathPart};
 
@@ -31,6 +33,28 @@ pub struct OpenApiInfo {
     /// An optional longer description (`info.description`).
     pub description: Option<String>,
 }
+
+/// Errors produced by checked OpenAPI generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenApiError {
+    /// Two documented endpoints declared the same `operationId`.
+    DuplicateOperationId {
+        /// The duplicate OpenAPI `operationId` value.
+        operation_id: String,
+    },
+}
+
+impl std::fmt::Display for OpenApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenApiError::DuplicateOperationId { operation_id } => {
+                write!(f, "duplicate OpenAPI operationId `{operation_id}`")
+            }
+        }
+    }
+}
+
+impl std::error::Error for OpenApiError {}
 
 impl OpenApiInfo {
     /// Construct an [`OpenApiInfo`] with a title and version and no description.
@@ -77,6 +101,14 @@ pub fn openapi_for<A: servant_docs::HasDocs>(api: &A, info: OpenApiInfo) -> Valu
     to_openapi(&api.docs(), info)
 }
 
+/// Generate an OpenAPI document and reject duplicate `operationId` metadata.
+pub fn checked_openapi_for<A: servant_docs::HasDocs>(
+    api: &A,
+    info: OpenApiInfo,
+) -> Result<Value, OpenApiError> {
+    to_checked_openapi(&api.docs(), info)
+}
+
 /// Generate an OpenAPI 3.0.3 document from a [`servant_docs::ApiDoc`].
 ///
 /// The result is a [`serde_json::Value`] with the shape
@@ -119,6 +151,27 @@ pub fn to_openapi(doc: &ApiDoc, info: OpenApiInfo) -> Value {
     })
 }
 
+/// Generate an OpenAPI document from a docs model after metadata checks.
+pub fn to_checked_openapi(doc: &ApiDoc, info: OpenApiInfo) -> Result<Value, OpenApiError> {
+    check_operation_ids(doc)?;
+    Ok(to_openapi(doc, info))
+}
+
+fn check_operation_ids(doc: &ApiDoc) -> Result<(), OpenApiError> {
+    let mut seen = BTreeSet::new();
+    for endpoint in doc.endpoints() {
+        let Some(operation_id) = &endpoint.operation_id else {
+            continue;
+        };
+        if !seen.insert(operation_id.clone()) {
+            return Err(OpenApiError::DuplicateOperationId {
+                operation_id: operation_id.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Render an endpoint path as an OpenAPI path template.
 ///
 /// `Static(s)` contributes `/s`; both capture kinds contribute `/{name}`. An
@@ -151,6 +204,9 @@ fn operation_for(endpoint: &EndpointDoc) -> Value {
     }
     if let Some(description) = &endpoint.description {
         op.insert("description".into(), json!(description));
+    }
+    if let Some(operation_id) = &endpoint.operation_id {
+        op.insert("operationId".into(), json!(operation_id));
     }
 
     let parameters = parameters_for(endpoint);

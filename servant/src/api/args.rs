@@ -80,6 +80,12 @@ impl<Next: HasArgs> HasArgs for Description<Next> {
 impl<Next: HasArgs> HasArgs for Summary<Next> {
     type Args = Next::Args;
 }
+impl<Next: HasArgs> HasArgs for OperationId<Next> {
+    type Args = Next::Args;
+}
+impl<A, Next: HasArgs> HasArgs for Fragment<A, Next> {
+    type Args = Next::Args;
+}
 impl<Next: HasArgs> HasArgs for Vault<Next> {
     type Args = HCons<Arc<Extensions>, Next::Args>;
 }

@@ -117,6 +117,7 @@ forward_endpoint!(QueryParam<A, P, S>);
 forward_endpoint!(QueryParams<A>);
 forward_endpoint!(Header<A, P, S>);
 forward_endpoint!(ReqBody<CTypes, A, S>);
+forward_endpoint!(Fragment<A>);
 
 // Combinators whose only type parameter is `Next` (the macro requires ≥1 extra
 // generic, so these are written out).
@@ -141,6 +142,7 @@ macro_rules! forward_endpoint_unary {
 forward_endpoint_unary!(QueryFlag);
 forward_endpoint_unary!(Description);
 forward_endpoint_unary!(Summary);
+forward_endpoint_unary!(OperationId);
 forward_endpoint_unary!(Vault);
 forward_endpoint!(WithResource<R>);
 forward_endpoint!(BasicAuth<Usr>);

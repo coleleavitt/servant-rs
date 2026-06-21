@@ -32,8 +32,10 @@ use servant::api::{
     Description,
     EmptyApi,
     Endpoint,
+    Fragment,
     Header,
     NoContentVerb,
+    OperationId,
     Path,
     QueryFlag,
     QueryParam,
@@ -45,7 +47,9 @@ use servant::api::{
 use servant::content::AllMime;
 use servant::method::MethodMarker;
 
-use crate::model::{ApiDoc, BodyDoc, EndpointDoc, ParamDoc, ParamKind, PathPart};
+use crate::model::{ApiDoc, BodyDoc, EndpointDoc, FragmentDoc, ParamDoc, ParamKind, PathPart};
+
+mod server;
 
 /// A documentation interpretation of an API description.
 ///
@@ -270,65 +274,19 @@ impl<Next: HasDocs> HasDocs for Summary<Next> {
     }
 }
 
-// Server-only combinators: transparent to docs (Vault/WithResource), or noted
-// (BasicAuth records that the endpoint requires authentication).
-impl<Next: HasDocs> HasDocs for servant::api::Vault<Next> {
-    fn docs_walk(&self, acc: EndpointDoc) -> ApiDoc {
-        self.next.docs_walk(acc)
-    }
-}
-
-impl<R, Next: HasDocs> HasDocs for servant::api::WithResource<R, Next> {
-    fn docs_walk(&self, acc: EndpointDoc) -> ApiDoc {
-        self.next.docs_walk(acc)
-    }
-}
-
-impl<Usr, Next: HasDocs> HasDocs for servant::api::BasicAuth<Usr, Next> {
+impl<Next: HasDocs> HasDocs for OperationId<Next> {
     fn docs_walk(&self, mut acc: EndpointDoc) -> ApiDoc {
-        let note = format!(
-            "Requires HTTP Basic authentication (realm `{}`).",
-            self.realm
-        );
-        acc.description = Some(match acc.description {
-            Some(d) => format!("{d}\n\n{note}"),
-            None => note,
-        });
+        acc.operation_id = Some(self.id.clone());
         self.next.docs_walk(acc)
     }
 }
 
-impl<Usr, Next: HasDocs> HasDocs for servant::api::AuthProtect<Usr, Next> {
+impl<A, Next: HasDocs> HasDocs for Fragment<A, Next> {
     fn docs_walk(&self, mut acc: EndpointDoc) -> ApiDoc {
-        let note = "Requires authentication.".to_string();
-        acc.description = Some(match acc.description {
-            Some(d) => format!("{d}\n\n{note}"),
-            None => note,
+        acc.fragment = Some(FragmentDoc {
+            type_name: std::any::type_name::<A>(),
+            description: self.description.clone(),
         });
-        self.next.docs_walk(acc)
-    }
-}
-
-impl<Next: HasDocs> HasDocs for servant::api::IsSecure<Next> {
-    fn docs_walk(&self, acc: EndpointDoc) -> ApiDoc {
-        self.next.docs_walk(acc)
-    }
-}
-
-impl<Next: HasDocs> HasDocs for servant::api::HttpVersion<Next> {
-    fn docs_walk(&self, acc: EndpointDoc) -> ApiDoc {
-        self.next.docs_walk(acc)
-    }
-}
-
-impl<Next: HasDocs> HasDocs for servant::api::RemoteHost<Next> {
-    fn docs_walk(&self, acc: EndpointDoc) -> ApiDoc {
-        self.next.docs_walk(acc)
-    }
-}
-
-impl<Name, Next: HasDocs> HasDocs for servant::api::WithNamedContext<Name, Next> {
-    fn docs_walk(&self, acc: EndpointDoc) -> ApiDoc {
         self.next.docs_walk(acc)
     }
 }

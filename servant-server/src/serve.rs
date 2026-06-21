@@ -15,10 +15,12 @@ use servant::api::{
     Capture,
     CaptureAll,
     Description,
+    Fragment,
     Header,
     HttpVersion,
     IsSecure,
     NoContentVerb,
+    OperationId,
     Path,
     QueryFlag,
     QueryParam,
@@ -95,9 +97,11 @@ forward_shape!(QueryParam<A, P, S>);
 forward_shape!(QueryParams<A>);
 forward_shape!(Header<A, P, S>);
 forward_shape!(ReqBody<CTypes, A, S>);
+forward_shape!(Fragment<A>);
 forward_shape!(QueryFlag);
 forward_shape!(Description);
 forward_shape!(Summary);
+forward_shape!(OperationId);
 forward_shape!(Vault);
 forward_shape!(WithResource<R>);
 forward_shape!(BasicAuth<Usr>);

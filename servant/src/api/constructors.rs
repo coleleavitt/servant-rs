@@ -207,6 +207,23 @@ pub fn summary<Next>(text: impl Into<String>, next: Next) -> Summary<Next> {
     }
 }
 
+/// Attach an `OperationId` to the API below.
+pub fn operation_id<Next>(id: impl Into<String>, next: Next) -> OperationId<Next> {
+    OperationId {
+        id: id.into(),
+        next,
+    }
+}
+
+/// Attach URI fragment metadata to the API below.
+pub fn fragment<A, Next>(description: impl Into<String>, next: Next) -> Fragment<A, Next> {
+    Fragment {
+        description: description.into(),
+        next,
+        _marker: PhantomData,
+    }
+}
+
 /// `Vault :>` — give the handler access to the request's `http::Extensions`.
 pub fn vault<Next>(next: Next) -> Vault<Next> {
     Vault { next }

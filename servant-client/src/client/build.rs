@@ -6,7 +6,9 @@ use servant::api::{
     CaptureAll,
     Description,
     Endpoint,
+    Fragment,
     Header,
+    OperationId,
     Path,
     QueryFlag,
     QueryParam,
@@ -44,6 +46,21 @@ where
 }
 
 macro_rules! metadata_client {
+    ($ty:ident < $($g:ident),+ >) => {
+        impl<$($g),+, Next: HasClient> HasClient for $ty<$($g),+, Next>
+        where
+            Self: Endpoint<Output = Next::Output, Args = Next::Args>,
+        {
+            fn build_request(
+                &self,
+                args: Self::Args,
+                req: &mut ClientRequest,
+            ) -> Result<(), String> {
+                self.next.build_request(args, req)
+            }
+            forward_decode!();
+        }
+    };
     ($ty:ident) => {
         impl<Next: HasClient> HasClient for $ty<Next>
         where
@@ -62,6 +79,8 @@ macro_rules! metadata_client {
 }
 metadata_client!(Description);
 metadata_client!(Summary);
+metadata_client!(OperationId);
+metadata_client!(Fragment<A>);
 
 impl<A, S, Next> HasClient for Capture<A, S, Next>
 where
@@ -188,4 +207,32 @@ where
         self.next.build_request(tail, req)
     }
     forward_decode!();
+}
+
+#[cfg(test)]
+mod tests {
+    use servant::api::{fragment, get, operation_id, path};
+    use servant::content::Json;
+    use servant::hlist::HNil;
+
+    use super::*;
+
+    #[test]
+    fn operation_id_and_fragment_do_not_change_client_request_target() {
+        let api = operation_id(
+            "getArticle",
+            path(
+                "article",
+                fragment::<String, _>("article section", get::<(Json,), String>()),
+            ),
+        );
+        let mut req = ClientRequest::new();
+
+        api.build_request(HNil, &mut req)
+            .expect("client request builds");
+
+        assert_eq!(req.method, http::Method::GET);
+        assert_eq!(req.target(), "/article");
+        assert!(req.query.is_empty());
+    }
 }

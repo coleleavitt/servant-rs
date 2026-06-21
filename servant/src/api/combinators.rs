@@ -137,6 +137,30 @@ pub struct Summary<Next> {
     pub next: Next,
 }
 
+/// A stable operation identifier attached to the API below it.
+///
+/// It has no routing, handler, link, or client effect. Documentation and
+/// OpenAPI interpretations surface it as endpoint metadata.
+pub struct OperationId<Next> {
+    /// The operation identifier.
+    pub id: String,
+    /// The rest of the API.
+    pub next: Next,
+}
+
+/// URI fragment metadata for the API below it.
+///
+/// Server routing and generated clients ignore this combinator because URI
+/// fragments are client-side. Safe links consume one value of type `A` and
+/// render it after `#`; Markdown docs record `description`.
+pub struct Fragment<A, Next> {
+    /// Human-readable fragment description for generated docs.
+    pub description: String,
+    /// The rest of the API.
+    pub next: Next,
+    pub(crate) _marker: PhantomData<fn() -> A>,
+}
+
 /// Access the request's `http::Extensions` (the analogue of Servant's `Vault`):
 /// per-request values set by middleware. Server-only; the handler receives
 /// `Arc<http::Extensions>`.
@@ -230,6 +254,8 @@ impl<CTypes, A, S, Next> sealed::Sealed for ReqBody<CTypes, A, S, Next> {}
 impl<L, R> sealed::Sealed for Alt<L, R> {}
 impl<Next> sealed::Sealed for Description<Next> {}
 impl<Next> sealed::Sealed for Summary<Next> {}
+impl<Next> sealed::Sealed for OperationId<Next> {}
+impl<A, Next> sealed::Sealed for Fragment<A, Next> {}
 impl<Next> sealed::Sealed for Vault<Next> {}
 impl<R, Next> sealed::Sealed for WithResource<R, Next> {}
 impl<Usr, Next> sealed::Sealed for BasicAuth<Usr, Next> {}

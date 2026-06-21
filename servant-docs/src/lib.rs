@@ -36,7 +36,7 @@ mod model;
 mod walk;
 
 pub use markdown::markdown;
-pub use model::{ApiDoc, BodyDoc, EndpointDoc, ParamDoc, ParamKind, PathPart};
+pub use model::{ApiDoc, BodyDoc, EndpointDoc, FragmentDoc, ParamDoc, ParamKind, PathPart};
 pub use walk::HasDocs;
 
 #[cfg(test)]
@@ -246,5 +246,38 @@ mod tests {
         // Statuses.
         assert!(md.contains("- Status code 200"), "md:\n{md}");
         assert!(md.contains("- Status code 201"), "md:\n{md}");
+    }
+
+    #[test]
+    fn fragment_metadata_is_recorded_in_docs_model_and_markdown() {
+        let api = path(
+            "article",
+            fragment::<String, _>("section anchor", get::<(Json,), User>()),
+        );
+        let doc = api.docs();
+        let ep = &doc.endpoints()[0];
+        let fragment = ep.fragment.as_ref().expect("fragment metadata");
+
+        assert_eq!(fragment.type_name, std::any::type_name::<String>());
+        assert_eq!(fragment.description, "section anchor");
+
+        let md = markdown(&doc);
+        assert!(md.contains("### Fragment:"), "md:\n{md}");
+        assert!(
+            md.contains("- *String*: section anchor"),
+            "fragment line missing:\n{md}"
+        );
+    }
+
+    #[test]
+    fn operation_id_metadata_is_recorded_in_docs_model_and_markdown() {
+        let api = operation_id("getArticle", path("article", get::<(Json,), User>()));
+        let doc = api.docs();
+        let ep = &doc.endpoints()[0];
+
+        assert_eq!(ep.operation_id.as_deref(), Some("getArticle"));
+
+        let md = markdown(&doc);
+        assert!(md.contains("OperationId: getArticle"), "md:\n{md}");
     }
 }
