@@ -1,0 +1,494 @@
+# Instincts generated from https://github.com/coleleavitt/servant-rs
+# Generated: 2026-06-22T13:17:43.805Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: servant-rs-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: feat, docs, fix, test
+
+## Evidence
+
+- 13 commits analyzed
+- Detected conventional commit pattern
+- Examples: Feat: Add operation id and fragment metadata, Test: Add comprehensive servant parity harness
+
+---
+id: servant-rs-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Commit Length
+
+## Action
+
+Keep commit messages concise (~35 characters)
+
+## Evidence
+
+- Average commit message length: 35 chars
+- Based on 13 commits
+
+---
+id: servant-rs-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Naming Files
+
+## Action
+
+Use snake_case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: snake_case
+
+---
+id: servant-rs-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: servant-rs-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: servant-rs-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.ts
+
+## Evidence
+
+- File pattern: *.test.ts
+- Consistent across test files
+
+---
+id: servant-rs-workflow-feature-development
+trigger: "when implementing a new feature"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Workflow Feature Development
+
+## Action
+
+Follow the feature-development workflow:
+1. Add feature implementation
+2. Add tests for feature
+3. Update documentation
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~23x per month
+- Files: **/*.test.*, **/api/**
+
+---
+id: servant-rs-workflow-add-new-combinator-or-endpoint
+trigger: "when doing add new combinator or endpoint"
+confidence: 0.65
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Workflow Add New Combinator Or Endpoint
+
+## Action
+
+Follow the add-new-combinator-or-endpoint workflow:
+1. Update or add implementation files in servant/src/api/* and servant/src/lib.rs
+2. Update or add related files in servant-client/src/client/*, servant-client/src/request.rs, and servant-client/src/lib.rs
+3. Update or add related files in servant-server/src/extract/*, servant-server/src/serve.rs, servant-server/src/handler.rs, and servant-server/src/lib.rs
+4. Update or add documentation support in servant-docs/src/* and servant-docs/src/walk/*
+5. Update or add OpenAPI support in servant-openapi/src/*
+6. Add or update tests in servant-client/tests/*, servant-server/tests/*, servant-docs/tests/*, and servant-openapi/tests/*
+7. Add new module files if needed (e.g., servant/src/host.rs, servant/src/query/deep.rs)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~3x per month
+- Files: servant/src/api/args.rs, servant/src/api/combinators.rs, servant/src/api/constructors.rs
+
+---
+id: servant-rs-workflow-extend-openapi-or-docs-metadata
+trigger: "when doing extend openapi or docs metadata"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Workflow Extend Openapi Or Docs Metadata
+
+## Action
+
+Follow the extend-openapi-or-docs-metadata workflow:
+1. Update servant-docs/src/model.rs, servant-docs/src/schema.rs, servant-docs/src/walk.rs, and related files
+2. Update servant-openapi/src/openapi.rs, servant-openapi/src/schema.rs, servant-openapi/src/walk/*, and related files
+3. Update or add relevant tests in servant-openapi/tests/*
+4. Update example or reference files in servant-server/examples/* and servant-server/tests/*
+5. Update docs/DESIGN.md or other documentation as needed
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: servant-docs/src/model.rs, servant-docs/src/schema.rs, servant-docs/src/walk.rs
+
+---
+id: servant-rs-workflow-add-or-update-test-harness
+trigger: "when doing add or update test harness"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/servant-rs
+---
+
+# Servant Rs Workflow Add Or Update Test Harness
+
+## Action
+
+Follow the add-or-update-test-harness workflow:
+1. Add or update test harness files in servant-server/tests/comprehensive.rs or similar
+2. Add or update support files in servant-server/tests/support/*
+3. Add or update UI or regression test files in servant-server/tests/ui/*
+4. Add or update test files in servant-client/tests/*, servant-docs/tests/*, servant-openapi/tests/* as relevant
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: servant-server/tests/comprehensive.rs, servant-server/tests/support/*.rs, servant-server/tests/ui/*.rs
+
+---
+id: servant-rs-instinct-file-naming
+trigger: "When creating a new file"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct File Naming
+
+## Action
+
+Name the file using snake_case
+
+## Evidence
+
+- Pattern in files: servant-client/src/client/build.rs
+- servant-docs/src/model.rs
+
+---
+id: servant-rs-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Function Naming
+
+## Action
+
+Use camelCase for function names
+
+## Evidence
+
+- Pattern in Rust codebase
+- Consistent with Rust community conventions
+
+---
+id: servant-rs-instinct-class-naming
+trigger: "When defining a new struct or enum"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Class Naming
+
+## Action
+
+Use PascalCase for type names
+
+## Evidence
+
+- Pattern in Rust codebase
+- Rust naming convention
+
+---
+id: servant-rs-instinct-constant-naming
+trigger: "When declaring a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Constant Naming
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for constant names
+
+## Evidence
+
+- Pattern in Rust codebase
+- Rust naming convention
+
+---
+id: servant-rs-instinct-import-style
+trigger: "When importing modules"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Import Style
+
+## Action
+
+Use relative imports
+
+## Evidence
+
+- Pattern in servant-client/src/client/build.rs
+- Pattern in servant-server/src/extract.rs
+
+---
+id: servant-rs-instinct-export-style
+trigger: "When exporting modules or functions"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in servant/src/lib.rs
+- Pattern in servant-client/src/lib.rs
+
+---
+id: servant-rs-instinct-test-file-location
+trigger: "When adding tests"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Test File Location
+
+## Action
+
+Place test files in the relevant crate's tests/ directory, using descriptive file names
+
+## Evidence
+
+- Pattern in servant-server/tests/comprehensive.rs
+- Pattern in servant-client/tests/*.rs
+
+---
+id: servant-rs-instinct-test-types
+trigger: "When writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Test Types
+
+## Action
+
+Write unit tests for new features and combinators
+
+## Evidence
+
+- Pattern in servant-client/tests/*.rs
+- Pattern in servant-server/tests/*.rs
+
+---
+id: servant-rs-instinct-test-harness
+trigger: "When adding a major feature or compatibility layer"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Test Harness
+
+## Action
+
+Add or update comprehensive test harnesses or parity tests
+
+## Evidence
+
+- Commit: Test: Add comprehensive servant parity harness
+- Pattern in servant-server/tests/comprehensive.rs
+
+---
+id: servant-rs-instinct-git-commit-format
+trigger: "When making a commit"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Git Commit Format
+
+## Action
+
+Use Conventional Commits with capitalized prefix (Feat, Fix, Docs, Test), followed by a colon and a concise description
+
+## Evidence
+
+- Commit: Feat: Add operation id and fragment metadata
+- Commit: Test: Add comprehensive servant parity harness
+- Commit: Docs: Document parity release readiness
+- Commit: Fix: Add raw endpoint safe links
+
+---
+id: servant-rs-instinct-add-new-combinator-or-endpoint
+trigger: "When someone wants to add a new combinator or endpoint (e.g., query string, deep query, host, raw, stream body) to the framework"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Add New Combinator Or Endpoint
+
+## Action
+
+Update or add implementation files in servant/src/api/* and servant/src/lib.rs; update related files in servant-client, servant-server, servant-docs, and servant-openapi; add or update tests; add new module files if needed
+
+## Evidence
+
+- Workflow: add-new-combinator-or-endpoint
+- Commits: Feat: Add query string combinator, Feat: Add deep query combinator, Feat: Add host combinator
+- Files: servant/src/api/combinators.rs, servant-client/src/client/build.rs, servant-server/src/extract.rs, servant-docs/src/model.rs, servant-openapi/src/openapi.rs
+
+---
+id: servant-rs-instinct-extend-openapi-or-docs-metadata
+trigger: "When someone wants to improve the metadata or schema information exposed by the framework's documentation or OpenAPI output"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Extend Openapi Or Docs Metadata
+
+## Action
+
+Update servant-docs/src/model.rs, servant-docs/src/schema.rs, servant-docs/src/walk.rs, servant-openapi/src/openapi.rs, servant-openapi/src/schema.rs, servant-openapi/src/walk.rs; update or add relevant tests and documentation
+
+## Evidence
+
+- Workflow: extend-openapi-or-docs-metadata
+- Files: servant-docs/src/model.rs, servant-openapi/src/openapi.rs, docs/DESIGN.md
+
+---
+id: servant-rs-instinct-add-or-update-test-harness
+trigger: "When someone wants to ensure new features or compatibility via comprehensive or parity test suites"
+confidence: 0.8
+domain: workflow
+source: repo-analysis
+source_repo: coleleavitt/servant-rs
+---
+
+# Servant Rs Instinct Add Or Update Test Harness
+
+## Action
+
+Add or update test harness files in servant-server/tests/comprehensive.rs or similar; update support, UI, and test files in relevant crates
+
+## Evidence
+
+- Workflow: add-or-update-test-harness
+- Commit: Test: Add comprehensive servant parity harness
+- Files: servant-server/tests/comprehensive.rs, servant-client/tests/*.rs
+
