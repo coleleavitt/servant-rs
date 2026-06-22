@@ -57,6 +57,7 @@ fn render_endpoint(ep: &EndpointDoc, lines: &mut Vec<String>) {
     render_headers(ep, lines);
     render_params(ep, lines);
     render_query_string(ep, lines);
+    render_deep_queries(ep, lines);
     render_fragment(ep, lines);
     render_request(ep, lines);
     render_response(ep, lines);
@@ -169,6 +170,22 @@ fn render_query_string(ep: &EndpointDoc, lines: &mut Vec<String>) {
         "- Captures the raw query string when available and decoded ordered query pairs."
             .to_string(),
     );
+    lines.push(String::new());
+}
+
+fn render_deep_queries(ep: &EndpointDoc, lines: &mut Vec<String>) {
+    if ep.deep_queries.is_empty() {
+        return;
+    }
+    lines.push("### Deep Query Parameters:".to_string());
+    lines.push(String::new());
+    for query in &ep.deep_queries {
+        lines.push(format!(
+            "- *{}*: `{}` (deepObject query parameter)",
+            query.name,
+            short_type_name(query.type_name)
+        ));
+    }
     lines.push(String::new());
 }
 

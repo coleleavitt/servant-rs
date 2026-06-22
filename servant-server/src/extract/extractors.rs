@@ -149,8 +149,6 @@ where
     }
 }
 
-// --- Header ---
-
 impl<A, P, S, Next> ServerChain for Header<A, P, S, Next>
 where
     A: FromHttpApiData,

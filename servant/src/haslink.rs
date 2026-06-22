@@ -17,6 +17,7 @@ use crate::api::{
     BasicAuth,
     Capture,
     CaptureAll,
+    DeepQuery,
     Description,
     Fragment,
     Header,
@@ -41,7 +42,7 @@ use crate::hlist::{HCons, HList, HNil};
 use crate::http_data::ToHttpApiData;
 use crate::link::{Link, Param};
 use crate::modifiers::{ArgShape, CaptureShape};
-use crate::query::Query;
+use crate::query::{Query, ToDeepQuery, render_deep_query_key};
 
 /// Walk an endpoint, contributing its path segments and query parameters to a
 /// [`Link`]. The `LinkArgs` HList omits header/body arguments.
@@ -168,6 +169,24 @@ impl<Next: HasLink> HasLink for QueryString<Next> {
     fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
         let HCons { head, tail } = args;
         link.set_query_string(head);
+        self.next.add_to_link(tail, link);
+    }
+}
+
+impl<A, Next> HasLink for DeepQuery<A, Next>
+where
+    A: ToDeepQuery,
+    Next: HasLink,
+{
+    type LinkArgs = HCons<A, Next::LinkArgs>;
+    fn add_to_link(&self, args: Self::LinkArgs, link: &mut Link) {
+        let HCons { head, tail } = args;
+        for entry in head.to_deep_query().entries() {
+            link.add_query(Param::DeepObject(
+                render_deep_query_key(&self.name, entry.path()),
+                entry.value().map(str::to_owned),
+            ));
+        }
         self.next.add_to_link(tail, link);
     }
 }

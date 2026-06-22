@@ -31,6 +31,7 @@ macro_rules! forward_response_checks {
 mod auth;
 mod captures;
 mod chain;
+mod deep_query;
 mod extractors;
 mod state;
 mod terminal;

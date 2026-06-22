@@ -1,8 +1,32 @@
 use super::*;
-use crate::api::{alt, capture, fragment, get, path, query_flag, query_param, query_string};
+use crate::api::{
+    alt,
+    capture,
+    deep_query,
+    fragment,
+    get,
+    path,
+    query_flag,
+    query_param,
+    query_string,
+};
 use crate::content::Json;
 use crate::hlist::{HCons, HNil, hlist1};
-use crate::query::Query;
+use crate::query::{DeepQueryEntry, DeepQueryParams, Query, ToDeepQuery};
+
+struct BookFilter {
+    author: String,
+    year: u16,
+}
+
+impl ToDeepQuery for BookFilter {
+    fn to_deep_query(&self) -> DeepQueryParams {
+        DeepQueryParams::new(vec![
+            DeepQueryEntry::with_value(["author"], self.author.clone()),
+            DeepQueryEntry::with_value(["year"], self.year.to_string()),
+        ])
+    }
+}
 
 #[test]
 fn builds_link_for_capture_endpoint() {
@@ -106,4 +130,22 @@ fn query_string_link_appends_later_query_combinators() {
     ]);
 
     assert_eq!(link.to_uri(), "/search?encoded=%40&debug");
+}
+
+#[test]
+fn deep_query_link_renders_nested_params() {
+    let api = path(
+        "books",
+        deep_query::<BookFilter, _>("filter", get::<(Json,), u64>()),
+    );
+    let ep = links(api);
+    let link = ep.link(hlist1(BookFilter {
+        author: "Herbert".to_string(),
+        year: 1965,
+    }));
+
+    assert_eq!(
+        link.to_uri(),
+        "/books?filter[author]=Herbert&filter[year]=1965"
+    );
 }

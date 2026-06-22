@@ -55,6 +55,7 @@ pub mod prelude {
         capture,
         capture_all,
         capture_lenient,
+        deep_query,
         description,
         fragment,
         get,
@@ -101,7 +102,15 @@ pub mod prelude {
     pub use crate::http_data::{FromHttpApiData, ToHttpApiData};
     pub use crate::method::{Delete, Get, Patch, Post, Put};
     pub use crate::modifiers::{Lenient, Optional, ParseError, Required, Strict};
-    pub use crate::query::Query;
+    pub use crate::query::{
+        DeepQueryEntry,
+        DeepQueryParams,
+        DeepQueryParseError,
+        DeepQueryPath,
+        FromDeepQuery,
+        Query,
+        ToDeepQuery,
+    };
     pub use crate::response::Headers;
     pub use crate::stream::{
         EventStreamFraming,

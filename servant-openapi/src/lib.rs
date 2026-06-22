@@ -33,6 +33,7 @@
 #![warn(missing_docs)]
 
 mod openapi;
+mod parameters;
 pub mod schema;
 
 pub use openapi::{

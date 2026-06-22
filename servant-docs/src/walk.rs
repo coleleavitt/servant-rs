@@ -29,6 +29,7 @@ use servant::api::{
     Alt,
     Capture,
     CaptureAll,
+    DeepQuery,
     Description,
     EmptyApi,
     Endpoint,
@@ -51,6 +52,7 @@ use servant::method::MethodMarker;
 use crate::model::{
     ApiDoc,
     BodyDoc,
+    DeepQueryDoc,
     EndpointDoc,
     FragmentDoc,
     ParamDoc,
@@ -249,6 +251,16 @@ impl<Next: HasDocs> HasDocs for QueryString<Next> {
         acc.query_string = Some(QueryStringDoc {
             decoded_ordered_pairs: true,
             raw_query_available: true,
+        });
+        self.next.docs_walk(acc)
+    }
+}
+
+impl<A, Next: HasDocs> HasDocs for DeepQuery<A, Next> {
+    fn docs_walk(&self, mut acc: EndpointDoc) -> ApiDoc {
+        acc.deep_queries.push(DeepQueryDoc {
+            name: self.name.clone(),
+            type_name: std::any::type_name::<A>(),
         });
         self.next.docs_walk(acc)
     }

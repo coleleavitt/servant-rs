@@ -14,8 +14,9 @@
 use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
-use servant_docs::{ApiDoc, EndpointDoc, ParamKind, PathPart};
+use servant_docs::{ApiDoc, EndpointDoc, PathPart};
 
+use crate::parameters::parameters_for;
 use crate::schema::schema_for;
 
 /// The `info` block of the generated OpenAPI document.
@@ -231,102 +232,6 @@ fn operation_for(endpoint: &EndpointDoc) -> Value {
     op.insert("responses".into(), responses_for(endpoint));
 
     Value::Object(op)
-}
-
-/// Collect every parameter object for an endpoint: path captures, query
-/// parameters, then request headers (in that order).
-fn parameters_for(endpoint: &EndpointDoc) -> Vec<Value> {
-    let mut params = Vec::new();
-
-    // Path captures — always required.
-    for part in &endpoint.path {
-        match part {
-            PathPart::Capture { name, type_name } | PathPart::CaptureAll { name, type_name } => {
-                params.push(path_parameter(name, type_name));
-            }
-            PathPart::Static(_) => {}
-        }
-    }
-
-    // Query parameters.
-    for param in &endpoint.query_params {
-        params.push(query_parameter(param));
-    }
-
-    // Request headers.
-    for header in &endpoint.headers {
-        params.push(header_parameter(header));
-    }
-
-    params
-}
-
-/// A path parameter: `in: "path"`, `required: true`.
-fn path_parameter(name: &str, type_name: &str) -> Value {
-    json!({
-        "name": name,
-        "in": "path",
-        "required": true,
-        "schema": schema_for(type_name),
-    })
-}
-
-/// A query parameter, keyed off its [`ParamKind`].
-///
-/// **[diff]** The docs model does not carry required-ness for query parameters,
-/// so every query parameter is emitted with `required: false`, matching
-/// Servant's optional-by-default query semantics.
-fn query_parameter(param: &servant_docs::ParamDoc) -> Value {
-    let mut obj = Map::new();
-    obj.insert("name".into(), json!(param.name));
-    obj.insert("in".into(), json!("query"));
-    obj.insert("required".into(), json!(false));
-
-    match param.kind {
-        ParamKind::Flag => {
-            // A valueless flag: a boolean that may appear with no value.
-            obj.insert("allowEmptyValue".into(), json!(true));
-            obj.insert("schema".into(), json!({ "type": "boolean" }));
-        }
-        ParamKind::List => {
-            // A repeated parameter: form-style, exploded array.
-            obj.insert("style".into(), json!("form"));
-            obj.insert("explode".into(), json!(true));
-            let mut schema = json!({ "type": "array", "items": {} });
-            attach_type_title(&mut schema, param.type_name);
-            obj.insert("schema".into(), schema);
-        }
-        ParamKind::Normal => {
-            let mut schema = schema_for(param.type_name);
-            attach_type_title(&mut schema, param.type_name);
-            obj.insert("schema".into(), schema);
-        }
-    }
-
-    Value::Object(obj)
-}
-
-/// A request header parameter: `in: "header"`, `required: false`.
-fn header_parameter(name: &str) -> Value {
-    json!({
-        "name": name,
-        "in": "header",
-        "required": false,
-        "schema": { "type": "string" },
-    })
-}
-
-/// Record the Rust `type_name` on a schema's `title` when it is not already set
-/// and the type name is informative. Keeps the source Rust type visible in the
-/// generated spec without inventing a structural schema.
-fn attach_type_title(schema: &mut Value, type_name: &str) {
-    if type_name.is_empty() {
-        return;
-    }
-    if let Value::Object(map) = schema {
-        map.entry("title")
-            .or_insert_with(|| json!(crate::schema::short_name(type_name)));
-    }
 }
 
 /// Build the `requestBody` object for a documented body.

@@ -4,6 +4,7 @@ use http::{HeaderName, HeaderValue};
 use servant::api::{
     Capture,
     CaptureAll,
+    DeepQuery,
     Description,
     Endpoint,
     Fragment,
@@ -21,7 +22,7 @@ use servant::content::{AllMime, AllMimeRender};
 use servant::hlist::HCons;
 use servant::http_data::ToHttpApiData;
 use servant::modifiers::{ArgShape, CaptureShape, Required};
-use servant::query::Query;
+use servant::query::{Query, ToDeepQuery};
 
 use super::endpoint::HasClient;
 use crate::request::{ClientError, ClientRequest, ClientResponse};
@@ -174,6 +175,22 @@ where
     fn build_request(&self, args: Self::Args, req: &mut ClientRequest) -> Result<(), String> {
         let HCons { head, tail } = args;
         req.set_query_string(head);
+        self.next.build_request(tail, req)
+    }
+    forward_decode!();
+}
+
+impl<A, Next> HasClient for DeepQuery<A, Next>
+where
+    A: ToDeepQuery,
+    Next: HasClient,
+    Self: Endpoint<Args = HCons<A, Next::Args>, Output = Next::Output>,
+{
+    fn build_request(&self, args: Self::Args, req: &mut ClientRequest) -> Result<(), String> {
+        let HCons { head, tail } = args;
+        for entry in head.to_deep_query().entries() {
+            req.append_deep_query(&self.name, entry.path(), entry.value().map(str::to_owned));
+        }
         self.next.build_request(tail, req)
     }
     forward_decode!();

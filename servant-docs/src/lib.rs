@@ -39,6 +39,7 @@ pub use markdown::markdown;
 pub use model::{
     ApiDoc,
     BodyDoc,
+    DeepQueryDoc,
     EndpointDoc,
     FragmentDoc,
     ParamDoc,
@@ -303,6 +304,28 @@ mod tests {
         assert!(
             md.contains("decoded ordered query pairs"),
             "query-string note missing:\n{md}"
+        );
+    }
+
+    #[test]
+    fn deep_query_metadata_is_recorded_in_docs_model_and_markdown() {
+        struct BookFilter;
+
+        let api = path(
+            "books",
+            deep_query::<BookFilter, _>("filter", get::<(Json,), User>()),
+        );
+        let doc = api.docs();
+        let ep = &doc.endpoints()[0];
+
+        assert_eq!(ep.deep_queries.len(), 1);
+        assert_eq!(ep.deep_queries[0].name, "filter");
+        assert!(ep.deep_queries[0].type_name.ends_with("BookFilter"));
+
+        let md = markdown(&doc);
+        assert!(
+            md.contains("- *filter*: `BookFilter` (deepObject query parameter)"),
+            "deep-query note missing:\n{md}"
         );
     }
 }

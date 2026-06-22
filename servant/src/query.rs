@@ -5,6 +5,21 @@
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
+mod deep;
+
+pub use deep::{
+    DeepQueryEntry,
+    DeepQueryParams,
+    DeepQueryParseError,
+    DeepQueryParseErrorKind,
+    DeepQueryPath,
+    FromDeepQuery,
+    ToDeepQuery,
+    parse_deep_query,
+    render_deep_query_entry,
+    render_deep_query_key,
+};
+
 const QUERY_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
@@ -92,14 +107,19 @@ pub fn render_pairs(pairs: &[(String, Option<String>)]) -> String {
     pairs
         .iter()
         .map(|(key, value)| match value {
-            Some(value) => format!("{}={}", encode_component(key), encode_component(value)),
-            None => encode_component(key),
+            Some(value) => format!(
+                "{}={}",
+                encode_query_component(key),
+                encode_query_component(value)
+            ),
+            None => encode_query_component(key),
         })
         .collect::<Vec<_>>()
         .join("&")
 }
 
-fn encode_component(value: &str) -> String {
+/// Percent-encode a single query-string component.
+pub fn encode_query_component(value: &str) -> String {
     utf8_percent_encode(value, QUERY_COMPONENT).to_string()
 }
 

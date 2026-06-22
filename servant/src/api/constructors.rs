@@ -73,6 +73,15 @@ pub fn query_string<Next>(next: Next) -> QueryString<Next> {
     QueryString { next }
 }
 
+/// `DeepQuery "name" A :>` — a nested deep-object query parameter.
+pub fn deep_query<A, Next>(name: impl Into<String>, next: Next) -> DeepQuery<A, Next> {
+    DeepQuery {
+        name: name.into(),
+        next,
+        _marker: PhantomData,
+    }
+}
+
 /// `Header "name" A :>` — optional, strict by default.
 pub fn header<A, Next>(name: impl Into<String>, next: Next) -> Header<A, Optional, Strict, Next> {
     Header {

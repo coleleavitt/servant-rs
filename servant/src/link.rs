@@ -48,6 +48,8 @@ pub enum Param {
     ArrayElem(String, String),
     /// A bare `key` with no value (from `QueryFlag`).
     Flag(String),
+    /// A `deepObject` key whose bracket path has already been rendered.
+    DeepObject(String, Option<String>),
 }
 
 /// How `QueryParams` array elements are rendered.
@@ -179,6 +181,7 @@ fn render_params(params: &[Param], style: ArrayElementStyle) -> String {
             Param::Single(key, value) => Some((key.clone(), Some(value.clone()))),
             Param::Flag(key) => Some((key.clone(), None)),
             Param::ArrayElem(_, _) => None,
+            Param::DeepObject(_, _) => None,
         })
         .collect();
 
@@ -195,6 +198,8 @@ fn render_params(params: &[Param], style: ArrayElementStyle) -> String {
                     ArrayElementStyle::Plain => format!("{}={}", encode(k), encode(v)),
                 },
                 Param::Flag(k) => encode(k),
+                Param::DeepObject(k, Some(v)) => format!("{k}={}", encode(v)),
+                Param::DeepObject(k, None) => k.clone(),
             })
             .collect::<Vec<_>>()
             .join("&"),

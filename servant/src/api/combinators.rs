@@ -100,6 +100,15 @@ pub struct QueryString<Next> {
     pub next: Next,
 }
 
+/// Extract a nested deep-object query parameter as `A`.
+pub struct DeepQuery<A, Next> {
+    /// The root query key, e.g. `filter` for `filter[name]=...`.
+    pub name: String,
+    /// The rest of the API.
+    pub next: Next,
+    pub(crate) _marker: PhantomData<fn() -> A>,
+}
+
 /// A request header parsed as `A` (`Header' mods "H" A :>`). Same modifier
 /// defaults as [`QueryParam`].
 pub struct Header<A, P, S, Next> {
@@ -260,6 +269,7 @@ impl<A, P, S, Next> sealed::Sealed for QueryParam<A, P, S, Next> {}
 impl<A, Next> sealed::Sealed for QueryParams<A, Next> {}
 impl<Next> sealed::Sealed for QueryFlag<Next> {}
 impl<Next> sealed::Sealed for QueryString<Next> {}
+impl<A, Next> sealed::Sealed for DeepQuery<A, Next> {}
 impl<A, P, S, Next> sealed::Sealed for Header<A, P, S, Next> {}
 impl<CTypes, A, S, Next> sealed::Sealed for ReqBody<CTypes, A, S, Next> {}
 impl<L, R> sealed::Sealed for Alt<L, R> {}

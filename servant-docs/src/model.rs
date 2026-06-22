@@ -101,6 +101,15 @@ pub struct QueryStringDoc {
     pub raw_query_available: bool,
 }
 
+/// Deep-object query parameter metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepQueryDoc {
+    /// The root query key.
+    pub name: String,
+    /// The Rust type parsed from the deep-object fields.
+    pub type_name: &'static str,
+}
+
 /// A single fully-resolved endpoint: a path/extractor chain ending in a verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointDoc {
@@ -128,6 +137,8 @@ pub struct EndpointDoc {
     pub fragment: Option<FragmentDoc>,
     /// Optional full query-string capture metadata (`QueryString`).
     pub query_string: Option<QueryStringDoc>,
+    /// Deep-object query parameters, in declaration order.
+    pub deep_queries: Vec<DeepQueryDoc>,
 }
 
 impl EndpointDoc {
@@ -147,6 +158,7 @@ impl EndpointDoc {
             operation_id: None,
             fragment: None,
             query_string: None,
+            deep_queries: Vec::new(),
         }
     }
 
@@ -190,6 +202,7 @@ impl EndpointDoc {
         if self.query_string.is_none() {
             self.query_string = other.query_string;
         }
+        self.deep_queries.extend(other.deep_queries);
     }
 }
 

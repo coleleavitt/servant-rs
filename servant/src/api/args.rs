@@ -63,6 +63,9 @@ impl<Next: HasArgs> HasArgs for QueryFlag<Next> {
 impl<Next: HasArgs> HasArgs for QueryString<Next> {
     type Args = HCons<crate::query::Query, Next::Args>;
 }
+impl<A, Next: HasArgs> HasArgs for DeepQuery<A, Next> {
+    type Args = HCons<A, Next::Args>;
+}
 impl<A, P, S, Next> HasArgs for Header<A, P, S, Next>
 where
     (P, S): ArgShape<A>,

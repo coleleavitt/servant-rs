@@ -115,6 +115,7 @@ forward_endpoint!(Capture<A, S>);
 forward_endpoint!(CaptureAll<A>);
 forward_endpoint!(QueryParam<A, P, S>);
 forward_endpoint!(QueryParams<A>);
+forward_endpoint!(DeepQuery<A>);
 forward_endpoint!(Header<A, P, S>);
 forward_endpoint!(ReqBody<CTypes, A, S>);
 forward_endpoint!(Fragment<A>);

@@ -1,6 +1,7 @@
 use servant::api::{
     Capture,
     CaptureAll,
+    DeepQuery,
     Description,
     Endpoint,
     Fragment,
@@ -87,6 +88,7 @@ forward_stream_info!(CaptureAll<A>);
 forward_stream_info!(QueryParam<A, P, S>);
 forward_stream_info!(QueryParams<A>);
 forward_stream_info!(QueryFlag);
+forward_stream_info!(DeepQuery<A>);
 forward_stream_info!(Header<A, P, S>);
 forward_stream_info!(ReqBody<CTypes, A, S>);
 forward_stream_info!(Description);

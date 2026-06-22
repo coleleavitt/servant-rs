@@ -5,13 +5,25 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderName, Method, StatusCode};
 use mime::Mime;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
-use servant::query::{Query, render_pairs};
+use servant::query::{
+    DeepQueryPath,
+    Query,
+    encode_query_component,
+    render_deep_query_key,
+    render_pairs,
+};
 
 const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
     .remove(b'.')
     .remove(b'~');
+
+#[derive(Clone)]
+enum QueryRender {
+    Plain(String, Option<String>),
+    DeepObject(String, Option<String>),
+}
 
 /// A request built up incrementally by the client combinators.
 #[derive(Clone)]
@@ -22,6 +34,7 @@ pub struct ClientRequest {
     pub segments: Vec<String>,
     /// Ordered query parameters; `None` value renders as a bare key.
     pub query: Vec<(String, Option<String>)>,
+    query_render: Vec<QueryRender>,
     /// Raw query prefix set by `QueryString`; later query combinators append.
     pub raw_query: Option<String>,
     /// Request headers.
@@ -39,6 +52,7 @@ impl ClientRequest {
             method: Method::GET,
             segments: Vec::new(),
             query: Vec::new(),
+            query_render: Vec::new(),
             raw_query: None,
             headers: HeaderMap::new(),
             accept: Vec::new(),
@@ -54,7 +68,20 @@ impl ClientRequest {
 
     /// Append a query parameter (`value` `None` renders as a bare key/flag).
     pub fn append_query(&mut self, name: &str, value: Option<String>) {
-        self.query.push((name.to_owned(), value));
+        let name = name.to_owned();
+        self.query.push((name.clone(), value.clone()));
+        self.query_render.push(QueryRender::Plain(name, value));
+    }
+
+    pub(crate) fn append_deep_query(
+        &mut self,
+        root: &str,
+        path: &DeepQueryPath,
+        value: Option<String>,
+    ) {
+        let key = render_deep_query_key(root, path);
+        self.query.push((key.clone(), value.clone()));
+        self.query_render.push(QueryRender::DeepObject(key, value));
     }
 
     /// Replace the full query string.
@@ -66,6 +93,11 @@ impl ClientRequest {
         } else {
             pairs
         };
+        self.query_render = self
+            .query
+            .iter()
+            .map(|(key, value)| QueryRender::Plain(key.clone(), value.clone()))
+            .collect();
     }
 
     /// Append a header value (allowing duplicates).
@@ -90,10 +122,24 @@ impl ClientRequest {
                     out.push('&');
                 }
             }
-            out.push_str(&render_pairs(&self.query));
+            out.push_str(&render_query(&self.query_render));
         }
         out
     }
+}
+
+fn render_query(query: &[QueryRender]) -> String {
+    query
+        .iter()
+        .map(|item| match item {
+            QueryRender::Plain(key, value) => render_pairs(&[(key.clone(), value.clone())]),
+            QueryRender::DeepObject(key, Some(value)) => {
+                format!("{key}={}", encode_query_component(value))
+            }
+            QueryRender::DeepObject(key, None) => key.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 impl Default for ClientRequest {
