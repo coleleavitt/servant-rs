@@ -14,7 +14,8 @@ duplicate route definitions:
 - **server** — routing tree + extraction pipeline + hyper/tower adapter,
 - **client** — typed request builders over a pluggable transport,
 - **links** — type-checked internal link generation,
-- **docs** — a documentation model rendered to markdown (OpenAPI-ready).
+- **docs** — a documentation model rendered to Markdown and an OpenAPI
+  Specification (OAS) document.
 
 No god object: the description types live in `servant`; each interpretation is a
 separate trait in its own crate/module that shares only those types and the
@@ -289,8 +290,8 @@ Built on the same architecture, all tested:
   identically, so the handler tuple always matches the `Alt` tree. (A proc-macro
   record `#[derive]` is **[diff]** deferred; the macros capture the practical
   benefit.)
-- **OpenAPI** — `servant-openapi::to_openapi`/`openapi_for` walk the shared
-  `ApiDoc` into an OpenAPI 3.0 document. The OpenAPI-specific walk records
+- **OpenAPI Specification** — `servant-openapi::to_openapi`/`openapi_for` walk
+  the shared `ApiDoc` into an OpenAPI document. The OAS-specific walk records
   `ToSchema` metadata for typed request and response bodies, emits compatible
   named schemas once under `components.schemas`, and keeps the documented
   type-name fallback for plain docs-model input. Raw and RawM endpoints are
@@ -319,11 +320,13 @@ All previously-deferred items are now implemented and tested:
   forwards the terminal's framing/codec/item types through the chain.
 - **Derive macros** (`servant-macros`): `#[derive(NamedApi)]` lowers a struct of
   endpoint fields to an `Alt` tree (`into_api`) + a name-keyed `<Name>Handlers`
-  record (`into_handlers`); `#[derive(ToSchema)]` produces an OpenAPI object
-  schema from a struct's fields (required = non-`Option`).
+  record (`into_handlers`); `#[derive(ToSchema)]` produces an OAS object schema
+  from a struct's fields (required = non-`Option`).
 
-Still out of scope (niche): a full `components/schemas` registry with recursive
-reference de-duplication, browser EventSource adapters, and every TLS deployment
-shape. The current scope includes parsed SSE events, `MultiVerb`-style streaming
-arms, a small `rustls` HTTP/1 listener adapter, and nested structural
-`#[derive(ToSchema)]` output without a shared component registry.
+Still out of scope: Haskell syntax compatibility, a full OpenAPI Overlay engine,
+JSONPath evaluation, Arazzo support, browser EventSource adapters, every TLS
+deployment shape, and a recursive `components.schemas` registry with global
+reference de-duplication. The current scope includes parsed SSE events,
+`MultiVerb`-style streaming arms, a small `rustls` HTTP/1 listener adapter, and
+nested structural `#[derive(ToSchema)]` output with checked duplicate-name
+rejection.

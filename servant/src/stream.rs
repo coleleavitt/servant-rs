@@ -5,8 +5,8 @@
 //! stream of items). The server renders each item with the endpoint's content
 //! type and wraps it with a [`Framing`] strategy, sending the result as a
 //! chunked response body. Server-Sent Events reuse this machinery via the
-//! [`ServerEvent`] item type, [`EventStreamFraming`], and the [`EventStream`]
-//! content type.
+//! [`ServerEvent`] item type, [`EventStreamFraming`], and the
+//! [`EventStream`](crate::content::EventStream) content type.
 
 use std::pin::Pin;
 

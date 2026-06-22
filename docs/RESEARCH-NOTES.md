@@ -1,5 +1,23 @@
 # Servant -> Rust research notes (auto-generated from understand workflow)
 
+## Current implementation status
+
+The Rust workspace now implements the parity-pass combinators called out by the
+Haskell reference: `OperationId`, `Fragment`, `QueryString`, `DeepQuery`,
+`Host`, `Raw`, `RawM`, and request `StreamBody`, in addition to the earlier
+server, generated-client, safe-link, Markdown-doc, and OpenAPI Specification
+interpretations. The ComprehensiveAPI-style Rust fixture checks that one typed
+description can drive server routing, generated clients where legal, safe links,
+Markdown docs, and an OpenAPI document.
+
+Intentionally unsupported or deferred: Haskell syntax compatibility, a bundled
+OpenAPI Overlay engine, JSONPath evaluation, Arazzo support, browser
+EventSource adapters, every TLS deployment topology, and a recursive
+`components.schemas` registry with global reference de-duplication. Server-only
+context and connection combinators (`Vault`, `WithResource`,
+`WithNamedContext`, `AuthProtect`, `IsSecure`, `HttpVersion`, `RemoteHost`) do
+not have generated-client representations.
+
 ## Servant API combinator surface (servant/src/Servant/API and Servant/API/*)
 
 **Summary:** Servant's API is a type-level eDSL: an API type is built from combinators connected by `:>` (sub/path) and `:<|>` (left-biased alternative). Each combinator is an empty/phantom data type that carries no runtime data; its only job is to drive *interpretations* (server routing, client generation, links, docs) via type classes (HasServer, HasClient, HasLink, etc.). Combinators that extract from a request add an argument to the handler function; structural and metadata combinators do not. Argument shape is governed by a type-level modifier list folded by FoldRequired/FoldLenient/FoldDescription. The Rust port must reproduce the *developer-facing guarantees* (one description drives every interpretation, extraction wrapping by Required/Optional + Strict/Lenient, left-biased route precedence, content negotiation) without copying the type-family machinery.

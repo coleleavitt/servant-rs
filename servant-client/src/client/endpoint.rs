@@ -179,7 +179,8 @@ metadata_raw_client!(OperationId);
 metadata_raw_client!(Fragment<A>);
 
 /// Build a typed client value from an API description: a [`ClientEndpoint`] for a
-/// single endpoint, or a nested tuple mirroring the [`Alt`] structure.
+/// single endpoint, or a nested tuple mirroring the
+/// [`Alt`](servant::api::Alt) structure.
 pub trait MakeClient {
     /// The resulting client value.
     type Client;

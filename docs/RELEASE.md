@@ -1,8 +1,8 @@
 # Release checklist
 
-`servant-rs` is currently targeting an initial `0.1.0` release. The `0.x` line
-does not promise semver-stable public APIs yet, but every release should still
-be reproducible and documented.
+`servant-rs` is currently targeting a `0.2.0` release after the parity pass. The
+`0.x` line does not promise semver-stable public APIs yet, but every release
+should still be reproducible and documented.
 
 ## Version policy
 
@@ -26,12 +26,12 @@ RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --all-features
 Then dry-run every crate intended for publication:
 
 ```sh
+cargo publish -p servant-macros --dry-run
 cargo publish -p servant --dry-run
 cargo publish -p servant-server --dry-run
 cargo publish -p servant-client --dry-run
 cargo publish -p servant-docs --dry-run
 cargo publish -p servant-openapi --dry-run
-cargo publish -p servant-macros --dry-run
 ```
 
 Publish dependency crates first (`servant-macros`, `servant`, then the

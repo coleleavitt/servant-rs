@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.83"
 license = "BSD-3-Clause"
@@ -51,12 +51,12 @@ thiserror = "2"
 base64 = "0.22"
 
 # Internal crates
-servant = { path = "servant", version = "0.1.0" }
-servant-server = { path = "servant-server", version = "0.1.0" }
-servant-client = { path = "servant-client", version = "0.1.0" }
-servant-docs = { path = "servant-docs", version = "0.1.0" }
-servant-openapi = { path = "servant-openapi", version = "0.1.0" }
-servant-macros = { path = "servant-macros", version = "0.1.0" }
+servant = { path = "servant", version = "0.2.0" }
+servant-server = { path = "servant-server", version = "0.2.0" }
+servant-client = { path = "servant-client", version = "0.2.0" }
+servant-docs = { path = "servant-docs", version = "0.2.0" }
+servant-openapi = { path = "servant-openapi", version = "0.2.0" }
+servant-macros = { path = "servant-macros", version = "0.2.0" }
 
 # Dev / test
 proptest = "1"

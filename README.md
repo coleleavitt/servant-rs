@@ -7,7 +7,7 @@ drives four interpretations that can never drift apart:
 - **server** — routing + request extraction + a hyper/tower adapter,
 - **client** — a typed client whose call arguments are checked against the API,
 - **links** — type-safe internal link generation,
-- **docs** — a documentation model rendered to Markdown.
+- **docs** — a documentation model rendered to Markdown and an OpenAPI document.
 
 ```rust
 use servant::prelude::*;
@@ -43,6 +43,8 @@ in-memory CRUD example, run `cargo run -p servant-server --example todos_crud`.
 | `servant-server` | routing tree, the phase-ordered extraction pipeline, a hyper/`tower` adapter, an in-process `TestClient`, and an optional `rustls` listener adapter |
 | `servant-client` | typed clients over a pluggable `RunClient` transport (hyper included) |
 | `servant-docs`   | the documentation model and Markdown renderer |
+| `servant-openapi` | OpenAPI Specification (OAS) document generation from the shared docs model |
+| `servant-macros` | derive macros for named route records and OAS schema metadata |
 
 ## How it works
 
@@ -67,17 +69,25 @@ A thorough, faithful port. Implemented and tested across the interpretations
 
 - static paths, captures (strict/lenient), capture-all;
 - query params (the full `Required`/`Optional` × `Strict`/`Lenient` matrix),
-  query-param lists (incl. the `name[]` form), query flags (value-sensitive);
+  query-param lists (incl. the `name[]` form), query flags (value-sensitive),
+  full-query replacement via `QueryString`, and structured `DeepQuery`;
 - request headers, request bodies; content negotiation (`Accept` q-values +
   wildcards, `Content-Type` matching);
 - verbs with status codes, no-content (204) verbs, **response `Headers`**
   (`VerbWithHeaders`), **`UVerb` union responses** (per-arm status, fixed body,
   no-body, headers, and streaming-arm helpers), **streaming + Server-Sent
-  Events** (`StreamGet`/`sse_get` with newline/netstring/SSE framing);
+  Events** (`StreamGet`/`sse_get` with newline/netstring/SSE framing), and
+  request `StreamBody` endpoints with streaming client support;
 - `Alt` alternatives + the `alt_all!`/`handlers!` named-routes macros;
-- **`BasicAuth`**, **`Vault`**, **`WithResource`** via a server `Context`;
-- metadata (`Summary`/`Description`);
-- **OpenAPI 3.0** output (`servant-openapi`) and Markdown docs (`servant-docs`).
+- **`BasicAuth`**, **`AuthProtect`**, **`Vault`**, **`WithResource`**,
+  **`WithNamedContext`**, and connection-info combinators via a server
+  `Context`;
+- metadata (`Summary`/`Description`/`OperationId`), `Fragment` safe links, and
+  `Host` routing/client header support;
+- opaque `Raw`/`RawM` terminals, with raw generated-client responses and
+  Markdown documentation;
+- **OpenAPI Specification 3.0** output (`servant-openapi`) and Markdown docs
+  (`servant-docs`).
 - **server test ergonomics** via `servant_server::TestClient`, which drives the
   same router/adapter path in-process without manual `http::Request` building.
 
@@ -94,21 +104,28 @@ keep-alive comments via `SseKeepAlive`/`sse_keep_alive`, and
 `#[derive(NamedApi)]` (record routes) / `#[derive(ToSchema)]` (nested OpenAPI
 schemas) in `servant-macros`.
 
-Intentional simplifications (`[diff]` in source / `docs/DESIGN.md`): `Vault`/
-`WithResource`/`IsSecure`/`HttpVersion`/`RemoteHost` are server-side connection
-or context observations; `AuthProtect` remains server-side generalized auth;
-`BasicAuth` is server/docs/links-only for now (clients send explicit headers).
-Response headers and unions use a runtime header list rather than type-level
-header lists; the OpenAPI route generator still falls back to name-based schemas
-where the docs model carries only a Rust type name, while `#[derive(ToSchema)]`
-produces nested structural object schemas. TLS termination is an adapter concern
+Intentionally unsupported or deferred (`[diff]` in source / `docs/DESIGN.md`):
+`Vault`/`WithResource`/`IsSecure`/`HttpVersion`/`RemoteHost` are server-side
+connection or context observations; `AuthProtect` remains server-side
+generalized auth; `BasicAuth` is server/docs/links-only for now (clients send
+explicit headers). `Raw`/`RawM` endpoints are opaque in Markdown and omitted
+from the OpenAPI document by default. servant-rs does not implement Haskell
+syntax compatibility, a full OpenAPI Overlay engine, JSONPath evaluation,
+Arazzo, browser EventSource adapters, or every TLS deployment shape. Response
+headers and unions use a runtime header list rather than type-level header
+lists; the OAS route generator still falls back to name-based schemas where the
+docs model carries only a Rust type name, while `#[derive(ToSchema)]` produces
+nested structural object schemas. TLS termination is an adapter concern
 documented in `docs/TLS.md`; enable `servant-server`'s `rustls` feature for the
 small `serve_rustls_listener` adapter, or terminate TLS in a trusted proxy.
 
 ## Developing
 
-Builds on **stable Rust** (no nightly features); MSRV **1.83** (verified —
-`cargo +1.83.0 test --workspace` passes).
+Builds on **stable Rust** (no nightly features). Crate `rust-version` values
+target **1.83**, but the current workspace-level
+`cargo +1.83.0 test --workspace` release gate is blocked before servant-rs
+source compilation by transitive dev/build tooling manifests that require Cargo
+`edition2024` support. Current source gates pass on the active toolchain.
 
 ```sh
 cargo fmt --all
@@ -138,5 +155,5 @@ Design notes: `docs/DESIGN.md` (committed architecture), `docs/RESEARCH-NOTES.md
 (per-subsystem map of the Haskell reference), `docs/DESIGN-CRITIQUE.md`
 (cross-subsystem reconciliation + build sequence), `docs/CLIENT-SERVER-SCOPE.md`
 (generated-client/server-only boundary), `docs/TLS.md` (TLS adapter story), and
-`docs/RELEASE.md` (0.1 release checklist). The read-only Haskell reference lives
+`docs/RELEASE.md` (release checklist). The read-only Haskell reference lives
 in `research/servant/` (git-ignored).
