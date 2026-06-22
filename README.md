@@ -122,10 +122,11 @@ small `serve_rustls_listener` adapter, or terminate TLS in a trusted proxy.
 ## Developing
 
 Builds on **stable Rust** (no nightly features). Crate `rust-version` values
-target **1.83**, but the current workspace-level
-`cargo +1.83.0 test --workspace` release gate is blocked before servant-rs
-source compilation by transitive dev/build tooling manifests that require Cargo
-`edition2024` support. Current source gates pass on the active toolchain.
+target **1.83**. Isolated Rust 1.83 source verification passes with default
+project configuration. On this machine, the non-isolated local
+`cargo +1.83.0 test --workspace` command can fail when user-level Cargo config
+injects unsupported rustc flags such as `-C link-self-contained=no`. Current
+source gates pass on the active toolchain.
 
 ```sh
 cargo fmt --all
