@@ -1,0 +1,6 @@
+interface:
+  display_name: "Servant Rs"
+  short_description: "Repo-specific patterns and workflows for servant-rs"
+  default_prompt: "Use the servant-rs repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
