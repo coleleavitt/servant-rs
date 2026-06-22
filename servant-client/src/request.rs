@@ -13,6 +13,12 @@ use servant::query::{
     render_pairs,
 };
 
+mod base_url;
+mod streaming;
+
+pub use base_url::{BaseUrl, Scheme};
+pub use streaming::{RequestByteStream, StreamingRequestBody};
+
 const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
@@ -43,6 +49,8 @@ pub struct ClientRequest {
     pub accept: Vec<Mime>,
     /// Request body and its media type.
     pub body: Option<(Bytes, Mime)>,
+    /// One-shot streaming request body and its media type.
+    pub streaming_body: Option<StreamingRequestBody>,
 }
 
 impl ClientRequest {
@@ -57,6 +65,7 @@ impl ClientRequest {
             headers: HeaderMap::new(),
             accept: Vec::new(),
             body: None,
+            streaming_body: None,
         }
     }
 
@@ -108,6 +117,18 @@ impl ClientRequest {
     /// Set the request body and its media type.
     pub fn set_body(&mut self, body: Bytes, media: Mime) {
         self.body = Some((body, media));
+        self.streaming_body = None;
+    }
+
+    /// Set a streaming request body and its media type.
+    pub fn set_streaming_body(&mut self, body: StreamingRequestBody) {
+        self.body = None;
+        self.streaming_body = Some(body);
+    }
+
+    /// Whether this request contains a one-shot streaming body.
+    pub fn has_streaming_body(&self) -> bool {
+        self.streaming_body.is_some()
     }
 
     /// Render the path + query into an origin-form target (e.g. `/a/b?x=1`).
@@ -175,6 +196,13 @@ impl std::fmt::Debug for ClientRequest {
             .field("accept", &self.accept)
             .field("headers", &redacted_headers(&self.headers))
             .field("body", &self.body.as_ref().map(|(b, m)| (b.len(), m)))
+            .field(
+                "streaming_body",
+                &self
+                    .streaming_body
+                    .as_ref()
+                    .map(StreamingRequestBody::media_type),
+            )
             .finish()
     }
 }
@@ -199,60 +227,6 @@ impl std::fmt::Debug for ClientResponse {
             .field("headers", &redacted_headers(&self.headers))
             .field("body_len", &self.body.len())
             .finish()
-    }
-}
-
-/// Where the client points. Default ports: 80 (http) / 443 (https).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BaseUrl {
-    /// `http` or `https`.
-    pub scheme: Scheme,
-    /// Host name.
-    pub host: String,
-    /// Port.
-    pub port: u16,
-    /// Base path prefix (without trailing slash), prepended to request paths.
-    pub path: String,
-}
-
-/// URL scheme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scheme {
-    /// `http://`
-    Http,
-    /// `https://`
-    Https,
-}
-
-impl BaseUrl {
-    /// `http://host:port` with no base path.
-    pub fn http(host: impl Into<String>, port: u16) -> Self {
-        BaseUrl {
-            scheme: Scheme::Http,
-            host: host.into(),
-            port,
-            path: String::new(),
-        }
-    }
-
-    /// The scheme as a string.
-    pub fn scheme_str(&self) -> &'static str {
-        match self.scheme {
-            Scheme::Http => "http",
-            Scheme::Https => "https",
-        }
-    }
-
-    /// Build the absolute URL for a request target (which begins with `/`).
-    pub fn url_for(&self, target: &str) -> String {
-        format!(
-            "{}://{}:{}{}{}",
-            self.scheme_str(),
-            self.host,
-            self.port,
-            self.path,
-            target
-        )
     }
 }
 
@@ -296,6 +270,9 @@ pub enum ClientError {
         /// The encoder error message.
         message: String,
     },
+    /// The selected transport does not support streaming request bodies.
+    #[error("streaming request body requires a streaming request transport")]
+    StreamingRequestUnsupported,
 }
 
 #[cfg(test)]

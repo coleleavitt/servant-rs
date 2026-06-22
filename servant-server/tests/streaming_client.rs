@@ -45,6 +45,37 @@ async fn streaming_client_round_trips_framed_items() {
     assert_eq!(nums, vec![10, 20, 30]);
 }
 
+#[tokio::test]
+async fn streaming_response_existing_call_stream_still_works() {
+    // Given: an existing response StreamVerb generated client over real hyper.
+    let router = serve(nums_api!(), || async {
+        Ok::<_, ServerError>(SourceStream::new(futures_util::stream::iter(vec![
+            1u32, 2, 3,
+        ])))
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("test listener has address");
+    tokio::spawn(serve_listener(listener, RouterService::new(router)));
+
+    // When: the generated client uses the existing call_stream API.
+    let transport = HyperClient::new(BaseUrl::http("127.0.0.1", addr.port()));
+    let endpoint = client(nums_api!());
+    let stream = endpoint
+        .call_stream(&transport, HNil)
+        .await
+        .expect("response stream starts");
+
+    // Then: framed response items still decode through the streaming path.
+    let items: Vec<Result<u32, String>> = stream.into_inner().collect().await;
+    let nums: Vec<u32> = items
+        .into_iter()
+        .map(|result| result.expect("stream item decodes"))
+        .collect();
+    assert_eq!(nums, vec![1, 2, 3]);
+}
+
 struct StaticStreamTransport {
     status: http::StatusCode,
     content_type: &'static str,

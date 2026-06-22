@@ -27,6 +27,7 @@ use stream_body_support::{ChannelBody, collect_text, stream_sum_service};
 struct User;
 
 include!("support/stream_body_host_tests.rs");
+include!("support/generated_stream_body_client_test.rs");
 
 #[tokio::test]
 async fn stream_body_delayed_chunks_sum_without_prebuffer() {

@@ -38,6 +38,7 @@ macro_rules! forward_decode {
 }
 
 mod host;
+mod stream_body;
 
 impl<Next: HasClient> HasClient for Path<Next>
 where

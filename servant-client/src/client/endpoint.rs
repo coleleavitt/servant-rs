@@ -38,6 +38,9 @@ where
         self.chain
             .build_request(args, &mut req)
             .map_err(|message| ClientError::EncodeFailure { message })?;
+        if req.has_streaming_body() && !transport.supports_streaming_request_body() {
+            return Err(ClientError::StreamingRequestUnsupported);
+        }
         let resp = transport.run_request(req).await?;
         self.chain.decode(resp)
     }

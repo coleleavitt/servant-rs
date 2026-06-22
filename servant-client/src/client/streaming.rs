@@ -12,6 +12,7 @@ use servant::api::{
     QueryParam,
     QueryParams,
     ReqBody,
+    StreamBody,
     StreamVerb,
     Summary,
 };
@@ -91,6 +92,7 @@ forward_stream_info!(QueryFlag);
 forward_stream_info!(DeepQuery<A>);
 forward_stream_info!(Header<A, P, S>);
 forward_stream_info!(ReqBody<CTypes, A, S>);
+forward_stream_info!(StreamBody<Framing, CType, T>);
 forward_stream_info!(Description);
 forward_stream_info!(Summary);
 forward_stream_info!(OperationId);
