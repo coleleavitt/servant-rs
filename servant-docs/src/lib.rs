@@ -42,6 +42,7 @@ pub use model::{
     DeepQueryDoc,
     EndpointDoc,
     FragmentDoc,
+    HostDoc,
     ParamDoc,
     ParamKind,
     PathPart,

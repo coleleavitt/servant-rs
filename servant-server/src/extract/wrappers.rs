@@ -5,6 +5,7 @@ use servant::api::{
     Description,
     Endpoint,
     Fragment,
+    Host,
     HttpVersion,
     IsSecure,
     OperationId,
@@ -17,9 +18,11 @@ use servant::api::{
 };
 use servant::error::ServerError;
 use servant::hlist::HCons;
+use servant::host::HostRequirement;
 
 use super::chain::{Rendered, ServerChain, cons_tail};
 use super::state::ExtractState;
+use crate::request::RequestData;
 use crate::result::RouteResult;
 
 // --- Path (no arg, no capture) ---
@@ -37,6 +40,48 @@ where
         self.next.validate_captures(c, i, ca)
     }
     forward_response_checks!();
+    fn extract(&self, st: &mut ExtractState<'_>) -> RouteResult<Self::Args> {
+        self.next.extract(st)
+    }
+}
+
+// --- Host (recoverable routing check) ---
+
+impl<Next: ServerChain> ServerChain for Host<Next>
+where
+    Self: Endpoint<Output = Next::Output, Args = Next::Args>,
+{
+    fn validate_captures(
+        &self,
+        c: &[String],
+        i: &mut usize,
+        ca: &Option<Vec<String>>,
+    ) -> RouteResult<()> {
+        self.next.validate_captures(c, i, ca)
+    }
+
+    fn host_check(&self, req: &RequestData) -> RouteResult<()> {
+        let Ok(required) = HostRequirement::parse(&self.name) else {
+            return RouteResult::Fail(ServerError::err404());
+        };
+        match req.host_authority() {
+            Some(authority) if required.matches_authority(authority) => self.next.host_check(req),
+            Some(_) | None => RouteResult::Fail(ServerError::err404()),
+        }
+    }
+
+    fn request_content_types(&self) -> Option<Vec<mime::Mime>> {
+        self.next.request_content_types()
+    }
+
+    fn accept_check(&self, accept: Option<&str>) -> RouteResult<()> {
+        self.next.accept_check(accept)
+    }
+
+    fn render(&self, accept: Option<&str>, value: Self::Output) -> Rendered {
+        self.next.render(accept, value)
+    }
+
     fn extract(&self, st: &mut ExtractState<'_>) -> RouteResult<Self::Args> {
         self.next.extract(st)
     }

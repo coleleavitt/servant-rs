@@ -91,6 +91,14 @@ pub fn header<A, Next>(name: impl Into<String>, next: Next) -> Header<A, Optiona
     }
 }
 
+/// `Host "name" :>` — require a Host header or URI authority.
+pub fn host<Next>(name: impl Into<String>, next: Next) -> Host<Next> {
+    Host {
+        name: name.into(),
+        next,
+    }
+}
+
 /// `ReqBody '[CTypes] A :>` — required, strict by default.
 pub fn req_body<CTypes, A, Next>(next: Next) -> ReqBody<CTypes, A, Strict, Next> {
     ReqBody {

@@ -14,10 +14,14 @@
 use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
-use servant_docs::{ApiDoc, EndpointDoc, PathPart};
+use servant::host::HostPortPolicy;
+use servant_docs::{ApiDoc, EndpointDoc, HostDoc, PathPart};
 
 use crate::parameters::parameters_for;
 use crate::schema::schema_for;
+
+const HOST_EXTENSION: &str = "x-servant-host";
+const HOST_ALTERNATIVES_EXTENSION: &str = "x-servant-host-alternatives";
 
 /// The `info` block of the generated OpenAPI document.
 ///
@@ -135,11 +139,11 @@ pub fn to_openapi(doc: &ApiDoc, info: OpenApiInfo) -> Value {
 
         match paths.get_mut(&path_key) {
             Some(Value::Object(methods)) => {
-                methods.insert(method, operation);
+                insert_method_operation(methods, method, operation);
             }
             _ => {
                 let mut methods = Map::new();
-                methods.insert(method, operation);
+                insert_method_operation(&mut methods, method, operation);
                 paths.insert(path_key, Value::Object(methods));
             }
         }
@@ -150,6 +154,47 @@ pub fn to_openapi(doc: &ApiDoc, info: OpenApiInfo) -> Value {
         "info": info.to_json(),
         "paths": Value::Object(paths),
     })
+}
+
+fn insert_method_operation(methods: &mut Map<String, Value>, method: String, operation: Value) {
+    if let Some(existing) = methods.get_mut(&method) {
+        append_same_method_alternative(existing, operation);
+    } else {
+        methods.insert(method, operation);
+    }
+}
+
+fn append_same_method_alternative(existing: &mut Value, operation: Value) {
+    let Value::Object(existing_op) = existing else {
+        return;
+    };
+    let Value::Object(operation_op) = operation else {
+        return;
+    };
+
+    if !existing_op.contains_key(HOST_ALTERNATIVES_EXTENSION) {
+        existing_op.insert(
+            HOST_ALTERNATIVES_EXTENSION.into(),
+            Value::Array(vec![same_method_alternative(existing_op)]),
+        );
+    }
+
+    if let Some(Value::Array(alternatives)) = existing_op.get_mut(HOST_ALTERNATIVES_EXTENSION) {
+        alternatives.push(same_method_alternative(&operation_op));
+    }
+}
+
+fn same_method_alternative(operation: &Map<String, Value>) -> Value {
+    let mut alternative = Map::new();
+    alternative.insert(
+        "host".into(),
+        operation
+            .get(HOST_EXTENSION)
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    alternative.insert("operation".into(), Value::Object(operation.clone()));
+    Value::Object(alternative)
 }
 
 /// Generate an OpenAPI document from a docs model after metadata checks.
@@ -225,6 +270,10 @@ fn operation_for(endpoint: &EndpointDoc) -> Value {
         );
     }
 
+    if let Some(host) = &endpoint.host {
+        op.insert(HOST_EXTENSION.into(), host_extension(host));
+    }
+
     if let Some(body) = &endpoint.request_body {
         op.insert("requestBody".into(), request_body_for(body));
     }
@@ -232,6 +281,22 @@ fn operation_for(endpoint: &EndpointDoc) -> Value {
     op.insert("responses".into(), responses_for(endpoint));
 
     Value::Object(op)
+}
+
+fn host_extension(host: &HostDoc) -> Value {
+    let mut ext = Map::new();
+    ext.insert("name".into(), json!(host.name));
+    ext.insert("hostnameCaseInsensitive".into(), json!(true));
+    match host.port_policy {
+        HostPortPolicy::IgnoreRequestPort => {
+            ext.insert("portPolicy".into(), json!("ignore-request-port"));
+        }
+        HostPortPolicy::RequireExplicitPort(port) => {
+            ext.insert("portPolicy".into(), json!("explicit-port-must-match"));
+            ext.insert("port".into(), json!(port));
+        }
+    }
+    Value::Object(ext)
 }
 
 /// Build the `requestBody` object for a documented body.

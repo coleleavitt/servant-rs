@@ -21,6 +21,7 @@ use crate::api::{
     Description,
     Fragment,
     Header,
+    Host,
     HttpVersion,
     IsSecure,
     NoContentVerb,
@@ -224,6 +225,7 @@ macro_rules! link_skip {
     };
 }
 link_skip!(Header<A, P, S>);
+link_skip!(Host);
 link_skip!(ReqBody<CTypes, A, S>);
 link_skip!(Description);
 link_skip!(Summary);

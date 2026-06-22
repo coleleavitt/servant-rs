@@ -83,6 +83,7 @@ impl RouterService {
             method: parts.method.clone(),
             query: parse_query(parts.uri.query()),
             raw_query: parts.uri.query().map(str::to_owned),
+            uri_authority: parts.uri.authority().map(ToString::to_string),
             headers: parts.headers.clone(),
             body: body_bytes,
             version: parts.version,

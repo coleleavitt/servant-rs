@@ -19,6 +19,9 @@ macro_rules! forward_response_checks {
         fn request_content_types(&self) -> Option<Vec<mime::Mime>> {
             self.next.request_content_types()
         }
+        fn host_check(&self, req: &crate::request::RequestData) -> crate::result::RouteResult<()> {
+            self.next.host_check(req)
+        }
         fn accept_check(&self, accept: Option<&str>) -> crate::result::RouteResult<()> {
             self.next.accept_check(accept)
         }

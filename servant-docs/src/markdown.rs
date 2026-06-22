@@ -18,6 +18,8 @@
 //! preserves the description's left-biased structure. Example payload bodies and
 //! curl samples (Servant's `ToSample`/`curlStr`) are not emitted.
 
+use servant::host::HostPortPolicy;
+
 use crate::model::{ApiDoc, EndpointDoc, ParamKind, PathPart};
 
 /// Render `doc` to a Markdown string with a fixed section order per endpoint.
@@ -54,6 +56,7 @@ fn render_endpoint(ep: &EndpointDoc, lines: &mut Vec<String>) {
 
     render_notes(ep, lines);
     render_captures(ep, lines);
+    render_host(ep, lines);
     render_headers(ep, lines);
     render_params(ep, lines);
     render_query_string(ep, lines);
@@ -98,6 +101,26 @@ fn render_captures(ep: &EndpointDoc, lines: &mut Vec<String>) {
     lines.push(String::new());
     for (name, type_name) in caps {
         lines.push(format!("- *{name}*: `{type_name}`"));
+    }
+    lines.push(String::new());
+}
+
+fn render_host(ep: &EndpointDoc, lines: &mut Vec<String>) {
+    let Some(host) = &ep.host else {
+        return;
+    };
+    lines.push("### Host:".to_string());
+    lines.push(String::new());
+    lines.push(format!("- Requires `Host: {}`", host.name));
+    match host.port_policy {
+        HostPortPolicy::IgnoreRequestPort => {
+            lines.push("- Host names are case-insensitive; request ports are ignored.".to_string());
+        }
+        HostPortPolicy::RequireExplicitPort(port) => {
+            lines.push(format!(
+                "- Host names are case-insensitive; request port must be explicitly `{port}`."
+            ));
+        }
     }
     lines.push(String::new());
 }

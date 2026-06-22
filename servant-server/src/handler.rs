@@ -54,7 +54,14 @@ where
             RouteResult::FailFatal(e) => return ready(RouteResult::FailFatal(e)),
         }
 
-        // Phase 2: method (HEAD is served by the GET route).
+        // Phase 2: host matching.
+        match self.chain.host_check(req) {
+            RouteResult::Route(()) => {}
+            RouteResult::Fail(e) => return ready(RouteResult::Fail(e)),
+            RouteResult::FailFatal(e) => return ready(RouteResult::FailFatal(e)),
+        }
+
+        // Phase 3: method (HEAD is served by the GET route).
         let method_ok = req.method == self.chain.method()
             || (req.is_head && self.chain.method() == http::Method::GET);
         if !method_ok {

@@ -212,6 +212,9 @@ where
     fn request_content_types(&self) -> Option<Vec<Mime>> {
         Some(CTypes::all_media_types())
     }
+    fn host_check(&self, req: &crate::request::RequestData) -> RouteResult<()> {
+        self.next.host_check(req)
+    }
     fn accept_check(&self, accept: Option<&str>) -> RouteResult<()> {
         self.next.accept_check(accept)
     }

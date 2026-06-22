@@ -37,6 +37,8 @@ macro_rules! forward_decode {
     };
 }
 
+mod host;
+
 impl<Next: HasClient> HasClient for Path<Next>
 where
     Self: Endpoint<Output = Next::Output, Args = Next::Args>,

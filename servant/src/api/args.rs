@@ -73,6 +73,9 @@ where
 {
     type Args = HCons<<(P, S) as ArgShape<A>>::Out, Next::Args>;
 }
+impl<Next: HasArgs> HasArgs for Host<Next> {
+    type Args = Next::Args;
+}
 impl<CTypes, A, S, Next> HasArgs for ReqBody<CTypes, A, S, Next>
 where
     (Required, S): ArgShape<A>,

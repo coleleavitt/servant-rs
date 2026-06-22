@@ -142,6 +142,7 @@ macro_rules! forward_endpoint_unary {
 }
 forward_endpoint_unary!(QueryFlag);
 forward_endpoint_unary!(QueryString);
+forward_endpoint_unary!(Host);
 forward_endpoint_unary!(Description);
 forward_endpoint_unary!(Summary);
 forward_endpoint_unary!(OperationId);

@@ -61,6 +61,7 @@ use crate::model::{
     QueryStringDoc,
 };
 
+mod host;
 mod server;
 
 /// A documentation interpretation of an API description.

@@ -24,6 +24,8 @@ pub struct RequestData {
     pub query: Vec<(String, Option<String>)>,
     /// The raw query string from the request URI, without the leading `?`.
     pub raw_query: Option<String>,
+    /// The URI authority from absolute-form requests, if present.
+    pub uri_authority: Option<String>,
     /// Request headers.
     pub headers: HeaderMap,
     /// The fully-buffered request body.
@@ -61,6 +63,7 @@ impl std::fmt::Debug for RequestData {
             .field("is_head", &self.is_head)
             .field("query", &self.query)
             .field("raw_query", &self.raw_query.as_ref().map(|_| "<present>"))
+            .field("uri_authority", &self.uri_authority)
             .field("headers", &headers)
             .field("body_len", &self.body.len())
             .finish()
@@ -80,6 +83,14 @@ impl RequestData {
         self.headers
             .get(http::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
+    }
+
+    /// The effective host authority: `Host` header first, then URI authority.
+    pub fn host_authority(&self) -> Option<&str> {
+        if let Some(host) = self.headers.get(http::header::HOST) {
+            return host.to_str().ok();
+        }
+        self.uri_authority.as_deref()
     }
 }
 

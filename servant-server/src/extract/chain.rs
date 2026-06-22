@@ -5,6 +5,7 @@ use servant::error::ServerError;
 use servant::hlist::HCons;
 
 use super::state::ExtractState;
+use crate::request::RequestData;
 use crate::result::RouteResult;
 
 pub(super) fn bad_request(msg: impl Into<String>) -> ServerError {
@@ -23,6 +24,11 @@ pub trait ServerChain: Endpoint {
         idx: &mut usize,
         capture_all: &Option<Vec<String>>,
     ) -> RouteResult<()>;
+
+    /// Phase 2: check any `Host` combinator before method/content checks.
+    fn host_check(&self, _req: &RequestData) -> RouteResult<()> {
+        RouteResult::Route(())
+    }
 
     /// The request body's accepted media types, if this chain has a `ReqBody`
     /// (for the phase-5 415 check). `None` means no body is expected.

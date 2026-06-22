@@ -119,6 +119,15 @@ pub struct Header<A, P, S, Next> {
     pub(crate) _marker: PhantomData<fn() -> (A, P, S)>,
 }
 
+/// Match the request `Host` header or URI authority before serving the API
+/// below it. The combinator contributes no handler argument.
+pub struct Host<Next> {
+    /// The required host authority, optionally including `:port`.
+    pub name: String,
+    /// The rest of the API.
+    pub next: Next,
+}
+
 /// A request body of content types `CTypes` decoded as `A`
 /// (`ReqBody' mods '[CTypes] A :>`). Presence is always required; `S` selects
 /// strict vs lenient parsing.
@@ -271,6 +280,7 @@ impl<Next> sealed::Sealed for QueryFlag<Next> {}
 impl<Next> sealed::Sealed for QueryString<Next> {}
 impl<A, Next> sealed::Sealed for DeepQuery<A, Next> {}
 impl<A, P, S, Next> sealed::Sealed for Header<A, P, S, Next> {}
+impl<Next> sealed::Sealed for Host<Next> {}
 impl<CTypes, A, S, Next> sealed::Sealed for ReqBody<CTypes, A, S, Next> {}
 impl<L, R> sealed::Sealed for Alt<L, R> {}
 impl<Next> sealed::Sealed for Description<Next> {}

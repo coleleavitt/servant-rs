@@ -15,6 +15,7 @@
 //! [`ApiDoc::push`].
 
 use mime::Mime;
+use servant::host::{HostPortPolicy, HostRequirement};
 
 /// One segment of an endpoint path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +111,33 @@ pub struct DeepQueryDoc {
     pub type_name: &'static str,
 }
 
+/// A documented `Host` requirement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostDoc {
+    /// The authority supplied to the `Host` combinator.
+    pub name: String,
+    /// How request ports are compared.
+    pub port_policy: HostPortPolicy,
+    /// The explicit required port, if the combinator included one.
+    pub port: Option<u16>,
+}
+
+impl HostDoc {
+    pub(crate) fn from_name(name: &str) -> Self {
+        let parsed = HostRequirement::parse(name);
+        let port = parsed.as_ref().ok().and_then(HostRequirement::port);
+        let port_policy = parsed.as_ref().ok().map_or(
+            HostPortPolicy::IgnoreRequestPort,
+            HostRequirement::port_policy,
+        );
+        HostDoc {
+            name: name.to_string(),
+            port_policy,
+            port,
+        }
+    }
+}
+
 /// A single fully-resolved endpoint: a path/extractor chain ending in a verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointDoc {
@@ -123,6 +151,8 @@ pub struct EndpointDoc {
     pub query_params: Vec<ParamDoc>,
     /// Names of headers the endpoint is sensitive to, in declaration order.
     pub headers: Vec<String>,
+    /// The required `Host` authority, if this endpoint is host-scoped.
+    pub host: Option<HostDoc>,
     /// The request body, if any.
     pub request_body: Option<BodyDoc>,
     /// The response content types negotiated for `Accept` (empty for 204).
@@ -151,6 +181,7 @@ impl EndpointDoc {
             status: http::StatusCode::OK,
             query_params: Vec::new(),
             headers: Vec::new(),
+            host: None,
             request_body: None,
             response_types: Vec::new(),
             summary: None,
@@ -164,8 +195,9 @@ impl EndpointDoc {
 
     /// The merge key: an endpoint is "the same" as another iff its rendered path
     /// and method match. Captures compare by `:name` form, like Servant.
-    fn key(&self) -> (Vec<String>, http::Method) {
+    fn key(&self) -> (Option<String>, Vec<String>, http::Method) {
         (
+            self.host.as_ref().map(|host| host.name.clone()),
             self.path.iter().map(PathPart::render).collect(),
             self.method.clone(),
         )
@@ -186,6 +218,9 @@ impl EndpointDoc {
         // only fill them if the left did not provide them.
         if self.request_body.is_none() {
             self.request_body = other.request_body;
+        }
+        if self.host.is_none() {
+            self.host = other.host;
         }
         if self.summary.is_none() {
             self.summary = other.summary;

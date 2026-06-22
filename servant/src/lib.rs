@@ -29,6 +29,7 @@ pub mod error;
 pub mod func;
 pub mod haslink;
 pub mod hlist;
+pub mod host;
 pub mod http_data;
 pub mod link;
 pub mod method;
@@ -61,6 +62,7 @@ pub mod prelude {
         get,
         get_with_headers,
         header,
+        host,
         http_version,
         is_secure,
         no_content,
