@@ -52,6 +52,7 @@ pub mod prelude {
         HasArgs,
         Raw,
         RawM,
+        StreamBody,
         alt,
         auth_protect,
         basic_auth,
@@ -80,6 +81,7 @@ pub mod prelude {
         remote_host,
         req_body,
         sse_get,
+        stream_body,
         stream_get,
         stream_verb,
         summary,
@@ -125,6 +127,7 @@ pub mod prelude {
         NoFraming,
         ServerEvent,
         SourceStream,
+        StreamBodyError,
     };
     pub use crate::uverb::{
         HeaderError,

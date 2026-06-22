@@ -118,6 +118,7 @@ forward_endpoint!(QueryParams<A>);
 forward_endpoint!(DeepQuery<A>);
 forward_endpoint!(Header<A, P, S>);
 forward_endpoint!(ReqBody<CTypes, A, S>);
+forward_endpoint!(StreamBody<Framing, CType, T>);
 forward_endpoint!(Fragment<A>);
 
 // Combinators whose only type parameter is `Next` (the macro requires ≥1 extra

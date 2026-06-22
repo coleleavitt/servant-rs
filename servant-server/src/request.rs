@@ -1,15 +1,18 @@
 //! The in-memory request the router and extractors operate on.
 //!
-//! The hyper adapter buffers the (bounded) body up front, so routing and
-//! extraction are synchronous over this owned snapshot; only the handler is
-//! async. Streaming bodies are a deliberate later addition.
+//! The adapter keeps the HTTP body one-shot until a selected endpoint asks for
+//! buffered `ReqBody`, raw request access, or streaming `StreamBody` handoff.
 
 use std::sync::Arc;
 
-use bytes::Bytes;
 use http::{Extensions, HeaderMap, Method};
+use servant::error::ServerError;
 use servant::query::Query;
 use servant::redact::is_sensitive_header;
+
+mod body;
+
+pub use body::{RequestBody, RequestBodyStream};
 
 /// Request-global data shared by every candidate route during dispatch.
 #[derive(Clone)]
@@ -28,8 +31,8 @@ pub struct RequestData {
     pub uri_authority: Option<String>,
     /// Request headers.
     pub headers: HeaderMap,
-    /// The fully-buffered request body.
-    pub body: Bytes,
+    /// The one-shot request body holder.
+    pub body: RequestBody,
     /// Per-request extensions (set by middleware); read by the `Vault` combinator.
     pub extensions: Arc<Extensions>,
     /// The request's HTTP version (for `HttpVersion`).
@@ -65,7 +68,7 @@ impl std::fmt::Debug for RequestData {
             .field("raw_query", &self.raw_query.as_ref().map(|_| "<present>"))
             .field("uri_authority", &self.uri_authority)
             .field("headers", &headers)
-            .field("body_len", &self.body.len())
+            .field("body_state", &self.body.state_label())
             .finish()
     }
 }
@@ -91,6 +94,18 @@ impl RequestData {
             return host.to_str().ok();
         }
         self.uri_authority.as_deref()
+    }
+
+    pub async fn buffer_body(&self) -> Result<bytes::Bytes, ServerError> {
+        self.body.buffer().await
+    }
+
+    pub fn buffered_body(&self) -> Result<bytes::Bytes, ServerError> {
+        self.body.buffered()
+    }
+
+    pub fn take_body_stream(&self) -> Result<RequestBodyStream, ServerError> {
+        self.body.take_stream()
     }
 }
 

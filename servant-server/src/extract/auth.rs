@@ -25,6 +25,40 @@ fn parse_basic_auth(header: &str) -> Option<BasicAuthData> {
     })
 }
 
+fn unauthorized_basic(realm: &str) -> ServerError {
+    let realm = realm.replace('"', "");
+    let mut error = ServerError::err401();
+    if let Ok(value) = http::HeaderValue::from_str(&format!("Basic realm=\"{realm}\"")) {
+        error = error.with_header(http::header::WWW_AUTHENTICATE, value);
+    }
+    error
+}
+
+fn basic_auth_user<Usr>(st: &ExtractState<'_>, realm: &str) -> Result<Usr, ServerError>
+where
+    Usr: Send + Sync + 'static,
+{
+    let Some(check) = st.lookup_ctx::<crate::context::BasicAuthCheck<Usr>>() else {
+        return Err(ServerError::err500().with_body("basic-auth check not configured in context"));
+    };
+    let Some(data) = st
+        .req
+        .headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_basic_auth)
+    else {
+        return Err(unauthorized_basic(realm));
+    };
+
+    match (check.0)(&data) {
+        BasicAuthResult::Authorized(user) => Ok(user),
+        BasicAuthResult::BadPassword
+        | BasicAuthResult::NoSuchUser
+        | BasicAuthResult::Unauthorized => Err(unauthorized_basic(realm)),
+    }
+}
+
 impl<Usr, Next> ServerChain for BasicAuth<Usr, Next>
 where
     Usr: Send + Sync + 'static,
@@ -39,37 +73,25 @@ where
     ) -> RouteResult<()> {
         self.next.validate_captures(c, i, ca)
     }
-    forward_response_checks!();
-    fn extract(&self, st: &mut ExtractState<'_>) -> RouteResult<Self::Args> {
-        let realm = self.realm.replace('"', "");
-        let unauthorized = || {
-            let mut e = ServerError::err401();
-            if let Ok(v) = http::HeaderValue::from_str(&format!("Basic realm=\"{realm}\"")) {
-                e = e.with_header(http::header::WWW_AUTHENTICATE, v);
+    forward_response_checks_without_pre_body!();
+
+    fn pre_body_check(&self, st: &mut ExtractState<'_>) -> RouteResult<()> {
+        match basic_auth_user::<Usr>(st, &self.realm) {
+            Ok(user) => {
+                st.push_prechecked(user);
+                self.next.pre_body_check(st)
             }
-            RouteResult::FailFatal(e)
-        };
+            Err(error) => RouteResult::FailFatal(error),
+        }
+    }
 
-        let Some(check) = st.lookup_ctx::<crate::context::BasicAuthCheck<Usr>>() else {
-            return RouteResult::FailFatal(
-                ServerError::err500().with_body("basic-auth check not configured in context"),
-            );
-        };
-        let Some(data) = st
-            .req
-            .headers
-            .get(http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(parse_basic_auth)
-        else {
-            return unauthorized();
-        };
-
-        match (check.0)(&data) {
-            BasicAuthResult::Authorized(usr) => cons_tail(usr, &self.next, st),
-            BasicAuthResult::BadPassword
-            | BasicAuthResult::NoSuchUser
-            | BasicAuthResult::Unauthorized => unauthorized(),
+    fn extract(&self, st: &mut ExtractState<'_>) -> RouteResult<Self::Args> {
+        if let Some(usr) = st.take_prechecked::<Usr>() {
+            return cons_tail(usr, &self.next, st);
+        }
+        match basic_auth_user::<Usr>(st, &self.realm) {
+            Ok(usr) => cons_tail(usr, &self.next, st),
+            Err(error) => RouteResult::FailFatal(error),
         }
     }
 }
@@ -90,8 +112,27 @@ where
     ) -> RouteResult<()> {
         self.next.validate_captures(c, i, ca)
     }
-    forward_response_checks!();
+    forward_response_checks_without_pre_body!();
+
+    fn pre_body_check(&self, st: &mut ExtractState<'_>) -> RouteResult<()> {
+        let Some(check) = st.lookup_ctx::<crate::context::AuthCheck<Usr>>() else {
+            return RouteResult::FailFatal(
+                ServerError::err500().with_body("auth check not configured in context"),
+            );
+        };
+        match (check.0)(&st.req.headers) {
+            Ok(user) => {
+                st.push_prechecked(user);
+                self.next.pre_body_check(st)
+            }
+            Err(e) => RouteResult::FailFatal(e),
+        }
+    }
+
     fn extract(&self, st: &mut ExtractState<'_>) -> RouteResult<Self::Args> {
+        if let Some(usr) = st.take_prechecked::<Usr>() {
+            return cons_tail(usr, &self.next, st);
+        }
         let Some(check) = st.lookup_ctx::<crate::context::AuthCheck<Usr>>() else {
             return RouteResult::FailFatal(
                 ServerError::err500().with_body("auth check not configured in context"),

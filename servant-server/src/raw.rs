@@ -30,14 +30,14 @@ pub struct RawRequest {
 }
 
 impl RawRequest {
-    pub(crate) fn from_request(req: &RequestData, tail: Vec<String>) -> Self {
+    pub(crate) fn from_request(req: &RequestData, tail: Vec<String>, body: Bytes) -> Self {
         RawRequest {
             tail,
             method: req.method.clone(),
             raw_query: req.raw_query.clone(),
             query: Query::from_parts(req.raw_query.clone(), req.query.clone()),
             headers: req.headers.clone(),
-            body: req.body.clone(),
+            body,
             extensions: req.extensions.clone(),
             version: req.version,
             remote_addr: req.remote_addr,
@@ -112,9 +112,15 @@ where
         _captures: Vec<String>,
         _capture_all: Option<Vec<String>>,
     ) -> BoxRouteFuture<'a> {
-        let request = RawRequest::from_request(req, tail);
-        let fut = (self.handler)(request);
-        Box::pin(async move { RouteResult::Route(fut.await) })
+        Box::pin(async move {
+            let body = match req.buffer_body().await {
+                Ok(body) => body,
+                Err(error) => return RouteResult::FailFatal(error),
+            };
+            let request = RawRequest::from_request(req, tail, body);
+            let fut = (self.handler)(request);
+            RouteResult::Route(fut.await)
+        })
     }
 }
 
@@ -135,10 +141,14 @@ where
         _captures: Vec<String>,
         _capture_all: Option<Vec<String>>,
     ) -> BoxRouteFuture<'a> {
-        let request = RawRequest::from_request(req, tail);
         let context = self.context.clone();
-        let fut = (self.handler)(request, context);
         Box::pin(async move {
+            let body = match req.buffer_body().await {
+                Ok(body) => body,
+                Err(error) => return RouteResult::FailFatal(error),
+            };
+            let request = RawRequest::from_request(req, tail, body);
+            let fut = (self.handler)(request, context);
             match fut.await {
                 Ok(response) => RouteResult::Route(response),
                 Err(error) => RouteResult::Route(error_response(&error)),

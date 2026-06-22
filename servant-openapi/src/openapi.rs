@@ -310,10 +310,13 @@ fn request_body_for(body: &servant_docs::BodyDoc) -> Value {
     for media in &body.content_types {
         content.insert(media_key(media), json!({ "schema": schema.clone() }));
     }
-    json!({
-        "required": true,
-        "content": Value::Object(content),
-    })
+    let mut request_body = Map::new();
+    request_body.insert("required".into(), json!(true));
+    request_body.insert("content".into(), Value::Object(content));
+    if body.streaming {
+        request_body.insert("x-servant-streaming-request-body".into(), json!(true));
+    }
+    Value::Object(request_body)
 }
 
 /// Build the `responses` object: a single entry keyed by the declared status.

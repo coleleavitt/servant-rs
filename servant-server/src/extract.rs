@@ -19,6 +19,35 @@ macro_rules! forward_response_checks {
         fn request_content_types(&self) -> Option<Vec<mime::Mime>> {
             self.next.request_content_types()
         }
+        fn request_body_mode(&self) -> Option<crate::extract::RequestBodyMode> {
+            self.next.request_body_mode()
+        }
+        fn host_check(&self, req: &crate::request::RequestData) -> crate::result::RouteResult<()> {
+            self.next.host_check(req)
+        }
+        fn accept_check(&self, accept: Option<&str>) -> crate::result::RouteResult<()> {
+            self.next.accept_check(accept)
+        }
+        fn pre_body_check(
+            &self,
+            st: &mut crate::extract::ExtractState<'_>,
+        ) -> crate::result::RouteResult<()> {
+            self.next.pre_body_check(st)
+        }
+        fn render(&self, accept: Option<&str>, value: Self::Output) -> Rendered {
+            self.next.render(accept, value)
+        }
+    };
+}
+
+macro_rules! forward_response_checks_without_pre_body {
+    () => {
+        fn request_content_types(&self) -> Option<Vec<mime::Mime>> {
+            self.next.request_content_types()
+        }
+        fn request_body_mode(&self) -> Option<crate::extract::RequestBodyMode> {
+            self.next.request_body_mode()
+        }
         fn host_check(&self, req: &crate::request::RequestData) -> crate::result::RouteResult<()> {
             self.next.host_check(req)
         }
@@ -36,10 +65,12 @@ mod captures;
 mod chain;
 mod deep_query;
 mod extractors;
+mod named_context;
 mod state;
+mod stream_body;
 mod terminal;
 mod wrappers;
 
-pub use chain::{Rendered, ServerChain};
+pub use chain::{Rendered, RequestBodyMode, ServerChain};
 pub use extractors::content_type_acceptable;
 pub use state::ExtractState;

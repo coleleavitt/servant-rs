@@ -226,6 +226,9 @@ fn render_request(ep: &EndpointDoc, lines: &mut Vec<String>) {
     lines.push("### Request:".to_string());
     lines.push(String::new());
     lines.push(format!("- Decoded as: `{}`", body.type_name));
+    if body.streaming {
+        lines.push("- Decoded incrementally as a streaming request body.".to_string());
+    }
     lines.push("- Supported content types are:".to_string());
     lines.push(String::new());
     for ct in &body.content_types {

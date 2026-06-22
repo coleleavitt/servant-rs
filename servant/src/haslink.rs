@@ -33,6 +33,7 @@ use crate::api::{
     QueryString,
     RemoteHost,
     ReqBody,
+    StreamBody,
     Summary,
     Vault,
     Verb,
@@ -227,6 +228,7 @@ macro_rules! link_skip {
 link_skip!(Header<A, P, S>);
 link_skip!(Host);
 link_skip!(ReqBody<CTypes, A, S>);
+link_skip!(StreamBody<Framing, CType, T>);
 link_skip!(Description);
 link_skip!(Summary);
 link_skip!(OperationId);

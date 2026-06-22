@@ -8,6 +8,7 @@ pub struct ExtractState<'a> {
     /// Stack of contexts: the base context at the bottom, named sub-contexts
     /// (from `WithNamedContext`) pushed on top; lookups search top-down.
     pub(super) contexts: Vec<&'a crate::context::Context>,
+    prechecked: Vec<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl<'a> ExtractState<'a> {
@@ -24,6 +25,7 @@ impl<'a> ExtractState<'a> {
             capture_all,
             req,
             contexts: vec![ctx],
+            prechecked: Vec::new(),
         }
     }
 
@@ -50,5 +52,18 @@ impl<'a> ExtractState<'a> {
 
     pub(super) fn pop_ctx(&mut self) {
         self.contexts.pop();
+    }
+
+    pub(super) fn push_prechecked<T: std::any::Any + Send + Sync>(&mut self, value: T) {
+        self.prechecked.push(Box::new(value));
+    }
+
+    pub(super) fn take_prechecked<T: std::any::Any + Send + Sync>(&mut self) -> Option<T> {
+        let index = self.prechecked.iter().position(|value| value.is::<T>())?;
+        self.prechecked
+            .remove(index)
+            .downcast::<T>()
+            .ok()
+            .map(|value| *value)
     }
 }

@@ -35,6 +35,7 @@ pub mod router;
 pub mod serve;
 #[cfg(feature = "hyper")]
 pub mod sse;
+mod stream_body;
 pub mod testing;
 #[cfg(feature = "rustls")]
 pub mod tls;

@@ -157,6 +157,14 @@ pub fn stream_verb<M, const STATUS: u16, Framing, CType, T>()
     }
 }
 
+/// `StreamBody framing ctype a :>` — a server-side streaming request body.
+pub fn stream_body<Framing, CType, T, Next>(next: Next) -> StreamBody<Framing, CType, T, Next> {
+    StreamBody {
+        next,
+        _marker: PhantomData,
+    }
+}
+
 /// `Raw` — an opaque terminal endpoint served by a raw HTTP handler.
 pub const fn raw() -> Raw {
     Raw

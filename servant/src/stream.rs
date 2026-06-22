@@ -13,7 +13,12 @@ use std::pin::Pin;
 use bytes::Bytes;
 use futures_core::Stream;
 
-use crate::content::{EventStream, MimeRender, MimeUnrender};
+mod sse;
+
+pub use sse::{EventStreamFraming, ServerEvent};
+
+/// Default maximum decoded item frame accepted by request-body stream decoding.
+pub const DEFAULT_MAX_DECODED_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 /// A boxed async stream of response items.
 pub struct SourceStream<T> {
@@ -34,6 +39,36 @@ impl<T> SourceStream<T> {
     }
 }
 
+/// Error surfaced as an item in a request [`crate::api::StreamBody`] handler
+/// stream.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StreamBodyError {
+    /// The HTTP body transport failed while the handler was polling it.
+    #[error("request stream transport error: {message}")]
+    Transport {
+        /// Human-readable transport error message.
+        message: String,
+    },
+    /// The frame delimiter or length prefix is malformed.
+    #[error("malformed request stream frame: {message}")]
+    MalformedFrame {
+        /// Human-readable framing error message.
+        message: String,
+    },
+    /// A decoded frame exceeded the configured per-frame cap.
+    #[error("request stream frame exceeded {limit} bytes")]
+    FrameTooLarge {
+        /// Maximum allowed decoded frame size.
+        limit: usize,
+    },
+    /// The frame was well-formed but could not be decoded as the declared item.
+    #[error("request stream item decode error: {message}")]
+    Decode {
+        /// Human-readable item decode error message.
+        message: String,
+    },
+}
+
 /// How each rendered stream item is delimited on the wire.
 pub trait Framing {
     /// Frame one already-rendered item (encode direction).
@@ -44,6 +79,30 @@ pub trait Framing {
     /// stream has ended so any trailing partial frame can be flushed. Returns
     /// `None` when no complete item is available yet.
     fn deframe(buf: &mut Vec<u8>, eof: bool) -> Option<Vec<u8>>;
+
+    /// Decode one bounded request frame, distinguishing malformed frames from
+    /// incomplete ones.
+    fn deframe_limited(
+        buf: &mut Vec<u8>,
+        eof: bool,
+        max_frame_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, StreamBodyError> {
+        if buf.len() > max_frame_bytes {
+            return Err(StreamBodyError::FrameTooLarge {
+                limit: max_frame_bytes,
+            });
+        }
+        match Self::deframe(buf, eof) {
+            Some(frame) if frame.len() > max_frame_bytes => Err(StreamBodyError::FrameTooLarge {
+                limit: max_frame_bytes,
+            }),
+            Some(frame) => Ok(Some(frame)),
+            None if eof && !buf.is_empty() => Err(StreamBodyError::MalformedFrame {
+                message: "incomplete trailing frame".to_string(),
+            }),
+            None => Ok(None),
+        }
+    }
 }
 
 /// No delimiter — items are concatenated as-is.
@@ -55,12 +114,6 @@ pub struct NewlineFraming;
 /// Netstring framing: `<len>:<item>,` (Servant's `NetstringFraming`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NetstringFraming;
-/// Server-Sent Event framing: each item is an SSE event block terminated by a
-/// blank line. This is the streaming-client counterpart of Servant's
-/// `Servant.API.ServerSentEvents` line parser.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct EventStreamFraming;
-
 impl Framing for NoFraming {
     fn frame(rendered: &[u8]) -> Bytes {
         Bytes::copy_from_slice(rendered)
@@ -117,175 +170,73 @@ impl Framing for NetstringFraming {
         buf.drain(..total);
         Some(item)
     }
-}
 
-impl Framing for EventStreamFraming {
-    fn frame(rendered: &[u8]) -> Bytes {
-        // `ServerEvent` rendering already terminates the event with a blank
-        // line. Keep the framing transparent on encode so custom SSE item types
-        // can fully control their wire representation.
-        Bytes::copy_from_slice(rendered)
-    }
-
-    fn deframe(buf: &mut Vec<u8>, eof: bool) -> Option<Vec<u8>> {
-        if let Some((item_end, drain_end)) = find_event_end(buf) {
-            let item = buf[..item_end].to_vec();
-            buf.drain(..drain_end);
-            return Some(item);
-        }
-        if eof && !buf.is_empty() {
-            Some(std::mem::take(buf))
-        } else {
-            None
-        }
-    }
-}
-
-fn find_event_end(buf: &[u8]) -> Option<(usize, usize)> {
-    let mut i = 0;
-    while i < buf.len() {
-        match buf[i] {
-            b'\n' if i + 1 < buf.len() && buf[i + 1] == b'\n' => return Some((i, i + 2)),
-            b'\n' if i + 2 < buf.len() && buf[i + 1] == b'\r' && buf[i + 2] == b'\n' => {
-                return Some((i, i + 3));
+    fn deframe_limited(
+        buf: &mut Vec<u8>,
+        eof: bool,
+        max_frame_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, StreamBodyError> {
+        let Some(colon) = buf.iter().position(|&b| b == b':') else {
+            if buf.len() > max_frame_bytes {
+                return Err(StreamBodyError::FrameTooLarge {
+                    limit: max_frame_bytes,
+                });
             }
-            b'\r' if i + 1 < buf.len() && buf[i + 1] == b'\r' => return Some((i, i + 2)),
-            b'\r'
-                if i + 3 < buf.len()
-                    && buf[i + 1] == b'\n'
-                    && buf[i + 2] == b'\r'
-                    && buf[i + 3] == b'\n' =>
-            {
-                return Some((i, i + 4));
-            }
-            _ => i += 1,
-        }
-    }
-    None
-}
-
-/// A single Server-Sent Event.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ServerEvent {
-    /// Comment lines (`: ...`), commonly used as SSE keep-alive heartbeats.
-    pub comment: Option<String>,
-    /// The `event:` type (optional).
-    pub event: Option<String>,
-    /// The `id:` field (optional).
-    pub id: Option<String>,
-    /// The `data:` payload (may be multi-line).
-    pub data: String,
-}
-
-impl ServerEvent {
-    /// An event carrying only data.
-    pub fn data(data: impl Into<String>) -> Self {
-        ServerEvent {
-            comment: None,
-            event: None,
-            id: None,
-            data: data.into(),
-        }
-    }
-    /// An SSE comment block, typically used as a keep-alive heartbeat.
-    pub fn comment(comment: impl Into<String>) -> Self {
-        ServerEvent {
-            comment: Some(comment.into()),
-            event: None,
-            id: None,
-            data: String::new(),
-        }
-    }
-    /// Set the event type.
-    pub fn with_event(mut self, event: impl Into<String>) -> Self {
-        self.event = Some(event.into());
-        self
-    }
-    /// Set the id.
-    pub fn with_id(mut self, id: impl Into<String>) -> Self {
-        self.id = Some(id.into());
-        self
-    }
-}
-
-/// Render a [`ServerEvent`] in the `text/event-stream` wire format. Combined
-/// with [`EventStreamFraming`] this produces an incrementally parseable SSE
-/// stream.
-impl MimeRender<EventStream> for ServerEvent {
-    fn mime_render(&self) -> Result<Bytes, String> {
-        let mut out = String::new();
-        if let Some(comment) = &self.comment {
-            for line in comment.split('\n') {
-                out.push_str(": ");
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-        if let Some(e) = &self.event {
-            out.push_str("event: ");
-            out.push_str(e);
-            out.push('\n');
-        }
-        if let Some(i) = &self.id {
-            out.push_str("id: ");
-            out.push_str(i);
-            out.push('\n');
-        }
-        if !self.data.is_empty()
-            || (self.comment.is_none() && self.event.is_none() && self.id.is_none())
-        {
-            for line in self.data.split('\n') {
-                out.push_str("data: ");
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-        out.push('\n'); // blank line terminates the event
-        Ok(Bytes::from(out.into_bytes()))
-    }
-}
-
-impl MimeUnrender<EventStream> for ServerEvent {
-    fn mime_unrender(bytes: &[u8]) -> Result<Self, String> {
-        let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
-        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-
-        let mut event = None;
-        let mut id = None;
-        let mut comments = Vec::new();
-        let mut data = Vec::new();
-
-        for line in normalized.lines() {
-            if line.is_empty() {
-                continue;
-            }
-            if let Some(comment) = line.strip_prefix(':') {
-                comments.push(comment.strip_prefix(' ').unwrap_or(comment).to_string());
-                continue;
-            }
-            let (field, value) = match line.split_once(':') {
-                Some((field, value)) => (field, value.strip_prefix(' ').unwrap_or(value)),
-                None => (line, ""),
-            };
-            match field {
-                "event" => event = Some(value.to_string()),
-                "id" => id = Some(value.to_string()),
-                "data" => data.push(value.to_string()),
-                "retry" => {}
-                _ => {}
-            }
-        }
-
-        Ok(ServerEvent {
-            comment: if comments.is_empty() {
-                None
+            return if eof && !buf.is_empty() {
+                Err(StreamBodyError::MalformedFrame {
+                    message: "netstring length prefix has no colon".to_string(),
+                })
             } else {
-                Some(comments.join("\n"))
-            },
-            event,
-            id,
-            data: data.join("\n"),
-        })
+                Ok(None)
+            };
+        };
+        let len = parse_netstring_len(&buf[..colon])?;
+        if len > max_frame_bytes {
+            return Err(StreamBodyError::FrameTooLarge {
+                limit: max_frame_bytes,
+            });
+        }
+        let data_start = colon
+            .checked_add(1)
+            .ok_or_else(|| malformed("netstring length overflow"))?;
+        let data_end = data_start
+            .checked_add(len)
+            .ok_or_else(|| malformed("netstring length overflow"))?;
+        let total = data_end
+            .checked_add(1)
+            .ok_or_else(|| malformed("netstring length overflow"))?;
+        if buf.len() < total {
+            return if eof {
+                Err(StreamBodyError::MalformedFrame {
+                    message: "incomplete netstring frame".to_string(),
+                })
+            } else {
+                Ok(None)
+            };
+        }
+        if buf.get(data_end).copied() != Some(b',') {
+            return Err(StreamBodyError::MalformedFrame {
+                message: "netstring frame is missing trailing comma".to_string(),
+            });
+        }
+        let item = buf[data_start..data_end].to_vec();
+        buf.drain(..total);
+        Ok(Some(item))
+    }
+}
+
+fn parse_netstring_len(raw: &[u8]) -> Result<usize, StreamBodyError> {
+    if raw.is_empty() || !raw.iter().all(u8::is_ascii_digit) {
+        return Err(malformed("netstring length prefix is not decimal"));
+    }
+    std::str::from_utf8(raw)
+        .ok()
+        .and_then(|text| text.parse().ok())
+        .ok_or_else(|| malformed("netstring length prefix is invalid"))
+}
+
+fn malformed(message: impl Into<String>) -> StreamBodyError {
+    StreamBodyError::MalformedFrame {
+        message: message.into(),
     }
 }

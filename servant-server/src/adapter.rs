@@ -1,8 +1,9 @@
 //! The framework-agnostic edge adapter: a [`tower_service::Service`] over any
 //! `http::Request<B>`, plus an optional hyper serving loop.
 //!
-//! The request body is buffered with a bound (security rule: no unbounded
-//! buffering) before routing, so the router and extractors stay synchronous.
+//! Request bodies stay one-shot through route selection. Buffered `ReqBody`
+//! endpoints collect with a bound after endpoint checks; `StreamBody` endpoints
+//! hand the live body to the handler.
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -10,10 +11,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use http_body_util::{BodyExt, LengthLimitError, Limited};
-use servant::error::ServerError;
+use bytes::Buf;
 
-use crate::request::{RequestData, parse_query, path_segments};
+use crate::request::{RequestBody, RequestData, parse_query, path_segments};
 use crate::response::{ResponseBody, error_response};
 use crate::result::RouteResult;
 use crate::router::{Router, dispatch};
@@ -53,25 +53,14 @@ impl RouterService {
         self
     }
 
-    /// Handle one request end-to-end (buffer body, route, render).
+    /// Handle one request end-to-end.
     pub async fn handle<B>(&self, req: http::Request<B>) -> http::Response<ResponseBody>
     where
         B: http_body::Body + Send + 'static,
-        B::Data: Send,
+        B::Data: Buf + Send + 'static,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         let (mut parts, body) = req.into_parts();
-        let body_bytes = match Limited::new(body, self.max_body).collect().await {
-            Ok(c) => c.to_bytes(),
-            Err(e) => {
-                let err = if e.downcast_ref::<LengthLimitError>().is_some() {
-                    ServerError::err413()
-                } else {
-                    ServerError::err400().with_body("could not read request body")
-                };
-                return error_response(&err);
-            }
-        };
 
         let conn = parts
             .extensions
@@ -85,7 +74,7 @@ impl RouterService {
             raw_query: parts.uri.query().map(str::to_owned),
             uri_authority: parts.uri.authority().map(ToString::to_string),
             headers: parts.headers.clone(),
-            body: body_bytes,
+            body: RequestBody::new(body, self.max_body),
             version: parts.version,
             remote_addr: conn.remote_addr,
             is_secure: conn.secure,
@@ -104,7 +93,7 @@ impl RouterService {
 impl<B> tower_service::Service<http::Request<B>> for RouterService
 where
     B: http_body::Body + Send + 'static,
-    B::Data: Send,
+    B::Data: Buf + Send + 'static,
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     type Response = http::Response<ResponseBody>;

@@ -34,6 +34,13 @@ impl<M, CTypes, Resp> HasArgs for UVerb<M, CTypes, Resp> {
 impl<M, const STATUS: u16, Framing, CType, T> HasArgs for StreamVerb<M, STATUS, Framing, CType, T> {
     type Args = HNil;
 }
+impl<Framing, CType, T, Next> HasArgs for StreamBody<Framing, CType, T, Next>
+where
+    Next: HasArgs,
+{
+    type Args =
+        HCons<crate::stream::SourceStream<Result<T, crate::stream::StreamBodyError>>, Next::Args>;
+}
 impl HasArgs for Raw {
     type Args = HNil;
 }

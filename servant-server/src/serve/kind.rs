@@ -24,6 +24,7 @@ use servant::api::{
     RawM,
     RemoteHost,
     ReqBody,
+    StreamBody,
     Summary,
     Vault,
     Verb,
@@ -108,6 +109,7 @@ forward_server_kind!(DeepQuery<A>);
 forward_server_kind!(Header<A, P, S>);
 forward_server_kind!(Host);
 forward_server_kind!(ReqBody<CTypes, A, S>);
+forward_server_kind!(StreamBody<Framing, CType, T>);
 forward_server_kind!(Fragment<A>);
 forward_server_kind!(QueryFlag);
 forward_server_kind!(Description);

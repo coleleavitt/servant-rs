@@ -27,6 +27,17 @@ pub struct StreamVerb<M, const STATUS: u16, Framing, CType, T> {
     pub(crate) _marker: PhantomData<fn() -> (M, Framing, CType, T)>,
 }
 
+/// A streaming request body decoded item-by-item before continuing to `Next`.
+///
+/// The handler receives
+/// `SourceStream<Result<T, crate::stream::StreamBodyError>>`; malformed frames
+/// and item decode failures are stream items after content-type acceptance.
+pub struct StreamBody<Framing, CType, T, Next> {
+    /// The rest of the API.
+    pub next: Next,
+    pub(crate) _marker: PhantomData<fn() -> (Framing, CType, T)>,
+}
+
 /// An opaque terminal endpoint served by a raw HTTP handler.
 ///
 /// Raw accepts every HTTP method, owns the unmatched path tail, and bypasses
@@ -283,6 +294,7 @@ impl<M, const STATUS: u16, Framing, CType, T> sealed::Sealed
     for StreamVerb<M, STATUS, Framing, CType, T>
 {
 }
+impl<Framing, CType, T, Next> sealed::Sealed for StreamBody<Framing, CType, T, Next> {}
 impl<M> sealed::Sealed for NoContentVerb<M> {}
 impl<Next> sealed::Sealed for Path<Next> {}
 impl<A, S, Next> sealed::Sealed for Capture<A, S, Next> {}

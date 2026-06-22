@@ -82,6 +82,8 @@ pub struct BodyDoc {
     pub content_types: Vec<Mime>,
     /// The Rust type the body is decoded as.
     pub type_name: &'static str,
+    /// Whether the body is decoded incrementally as a request stream.
+    pub streaming: bool,
 }
 
 /// A documented URI fragment.

@@ -29,6 +29,7 @@ use servant::api::{
     QueryString,
     RemoteHost,
     ReqBody,
+    StreamBody,
     Summary,
     Vault,
     Verb,
@@ -103,6 +104,7 @@ forward_shape!(DeepQuery<A>);
 forward_shape!(Header<A, P, S>);
 forward_shape!(Host);
 forward_shape!(ReqBody<CTypes, A, S>);
+forward_shape!(StreamBody<Framing, CType, T>);
 forward_shape!(Fragment<A>);
 forward_shape!(QueryFlag);
 forward_shape!(Description);

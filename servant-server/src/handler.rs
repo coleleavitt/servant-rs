@@ -8,7 +8,7 @@ use bytes::Bytes;
 use servant::error::ServerError;
 use servant::func::HandlerFn;
 
-use crate::extract::{ExtractState, ServerChain, content_type_acceptable};
+use crate::extract::{ExtractState, RequestBodyMode, ServerChain, content_type_acceptable};
 use crate::request::RequestData;
 use crate::response::{build_response, error_response};
 use crate::result::RouteResult;
@@ -84,20 +84,35 @@ where
             }
         }
 
-        // Phases 6-8: extract the argument list (FailFatal/400 on failure).
-        let mut st = ExtractState::new(captures, capture_all, req, &self.context);
-        let args = match self.chain.extract(&mut st) {
-            RouteResult::Route(a) => a,
+        let mut pre_body_state =
+            ExtractState::new(captures.clone(), capture_all.clone(), req, &self.context);
+        match self.chain.pre_body_check(&mut pre_body_state) {
+            RouteResult::Route(()) => {}
             RouteResult::Fail(e) => return ready(RouteResult::Fail(e)),
             RouteResult::FailFatal(e) => return ready(RouteResult::FailFatal(e)),
-        };
+        }
 
-        // Run the handler, then render (a handler error is still a real response).
-        let fut = self.handler.call_hlist(args);
         let chain = self.chain.clone();
         let accept_owned = accept.map(|s| s.to_owned());
         let is_head = req.is_head;
+        let body_mode = self.chain.request_body_mode();
         Box::pin(async move {
+            if body_mode == Some(RequestBodyMode::Buffered) {
+                match req.buffer_body().await {
+                    Ok(_) => {}
+                    Err(error) => return RouteResult::FailFatal(error),
+                }
+            }
+
+            // Phases 6-8: extract the argument list (FailFatal/400 on failure).
+            let args = match self.chain.extract(&mut pre_body_state) {
+                RouteResult::Route(a) => a,
+                RouteResult::Fail(e) => return RouteResult::Fail(e),
+                RouteResult::FailFatal(e) => return RouteResult::FailFatal(e),
+            };
+
+            // Run the handler, then render (a handler error is still a real response).
+            let fut = self.handler.call_hlist(args);
             match fut.await {
                 Ok(out) => {
                     let (status, mime, mut body, extra_headers) =

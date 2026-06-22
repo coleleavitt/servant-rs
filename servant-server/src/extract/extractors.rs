@@ -7,7 +7,7 @@ use servant::http_data::FromHttpApiData;
 use servant::modifiers::{ArgError, ArgShape, ParseError, Required};
 use servant::query::Query;
 
-use super::chain::{Rendered, ServerChain, bad_request, cons_tail};
+use super::chain::{Rendered, RequestBodyMode, ServerChain, bad_request, cons_tail};
 use super::state::ExtractState;
 use crate::result::RouteResult;
 
@@ -212,18 +212,28 @@ where
     fn request_content_types(&self) -> Option<Vec<Mime>> {
         Some(CTypes::all_media_types())
     }
+    fn request_body_mode(&self) -> Option<RequestBodyMode> {
+        Some(RequestBodyMode::Buffered)
+    }
     fn host_check(&self, req: &crate::request::RequestData) -> RouteResult<()> {
         self.next.host_check(req)
     }
     fn accept_check(&self, accept: Option<&str>) -> RouteResult<()> {
         self.next.accept_check(accept)
     }
+    fn pre_body_check(&self, st: &mut ExtractState<'_>) -> RouteResult<()> {
+        self.next.pre_body_check(st)
+    }
     fn render(&self, accept: Option<&str>, value: Self::Output) -> Rendered {
         self.next.render(accept, value)
     }
     fn extract(&self, st: &mut ExtractState<'_>) -> RouteResult<Self::Args> {
+        let body = match st.req.buffered_body() {
+            Ok(body) => body,
+            Err(error) => return RouteResult::FailFatal(error),
+        };
         let decoded =
-            servant::content::negotiate_content::<CTypes, A>(st.req.content_type(), &st.req.body);
+            servant::content::negotiate_content::<CTypes, A>(st.req.content_type(), &body);
         let raw: Option<Result<A, ParseError>> = match decoded {
             // Content-type was already validated (415) before extraction.
             None => return RouteResult::FailFatal(ServerError::err415()),

@@ -8,6 +8,12 @@ use super::state::ExtractState;
 use crate::request::RequestData;
 use crate::result::RouteResult;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestBodyMode {
+    Buffered,
+    Streaming,
+}
+
 pub(super) fn bad_request(msg: impl Into<String>) -> ServerError {
     ServerError::err400().with_body(msg.into())
 }
@@ -34,8 +40,18 @@ pub trait ServerChain: Endpoint {
     /// (for the phase-5 415 check). `None` means no body is expected.
     fn request_content_types(&self) -> Option<Vec<Mime>>;
 
+    fn request_body_mode(&self) -> Option<RequestBodyMode> {
+        None
+    }
+
     /// Phase 4: 406 check — is any response content type acceptable?
     fn accept_check(&self, accept: Option<&str>) -> RouteResult<()>;
+
+    /// Phase 5a: checks that must happen before body buffering or streaming
+    /// handoff, such as authentication.
+    fn pre_body_check(&self, _st: &mut ExtractState<'_>) -> RouteResult<()> {
+        RouteResult::Route(())
+    }
 
     /// Render the handler's output, negotiating the response content type.
     fn render(&self, accept: Option<&str>, value: Self::Output) -> Rendered;

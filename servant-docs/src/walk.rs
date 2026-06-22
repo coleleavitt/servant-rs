@@ -64,6 +64,7 @@ use crate::model::{
 mod host;
 mod raw;
 mod server;
+mod stream_body;
 
 /// A documentation interpretation of an API description.
 ///
@@ -287,6 +288,7 @@ where
         acc.request_body = Some(BodyDoc {
             content_types: CTypes::all_media_types(),
             type_name: std::any::type_name::<A>(),
+            streaming: false,
         });
         self.next.docs_walk(acc)
     }
