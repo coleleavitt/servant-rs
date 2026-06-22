@@ -8,7 +8,16 @@
 mod build;
 mod decode;
 mod endpoint;
+mod kind;
 mod streaming;
 
-pub use endpoint::{ClientEndpoint, HasClient, MakeClient, client};
+pub use endpoint::{
+    ClientEndpoint,
+    HasClient,
+    HasRawClient,
+    MakeClient,
+    RawClientEndpoint,
+    client,
+};
+pub use kind::{BuildClientByKind, ClientKind, RawClient, TypedClient};
 pub use streaming::StreamInfo;

@@ -42,7 +42,7 @@ Header<A, P, S, Next>      name: String   P=Optional S=Strict       (arg per Arg
 ReqBody<Ct, A, S, Next>    S=Strict (presence is always Required)   (arg: A or Result<A,_>)
 Verb<M, STATUS, Ct, A>     method+status (terminal)                 (output: A)
 NoContentVerb<M>           terminal, 204                            (output: NoContent)
-Raw                        terminal, opaque                          (handler is a Service)
+Raw / RawM                 terminal, opaque                          (handler owns tail)
 Description/Summary/OperationId/Fragment   metadata wrappers        (no arg, no routing)
 ```
 
@@ -291,7 +291,9 @@ Built on the same architecture, all tested:
   benefit.)
 - **OpenAPI** — `servant-openapi::to_openapi`/`openapi_for` walk the shared
   `ApiDoc` into an OpenAPI 3.0 document (name-based schemas pending a `ToSchema`
-  derive).
+  derive). Raw and RawM endpoints are documented as opaque in Markdown and
+  omitted from the OpenAPI document by default because they accept all methods
+  and own an untyped tail.
 
 ## 14. Third pass: full combinator + interpretation parity
 

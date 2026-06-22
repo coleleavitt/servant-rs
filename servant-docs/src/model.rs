@@ -138,6 +138,15 @@ impl HostDoc {
     }
 }
 
+/// An opaque raw terminal endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawDoc {
+    /// `Raw`, served by a raw response handler.
+    Raw,
+    /// `RawM`, served by a raw response handler with context/error access.
+    RawM,
+}
+
 /// A single fully-resolved endpoint: a path/extractor chain ending in a verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointDoc {
@@ -169,6 +178,8 @@ pub struct EndpointDoc {
     pub query_string: Option<QueryStringDoc>,
     /// Deep-object query parameters, in declaration order.
     pub deep_queries: Vec<DeepQueryDoc>,
+    /// Opaque raw terminal metadata.
+    pub raw: Option<RawDoc>,
 }
 
 impl EndpointDoc {
@@ -190,16 +201,21 @@ impl EndpointDoc {
             fragment: None,
             query_string: None,
             deep_queries: Vec::new(),
+            raw: None,
         }
     }
 
     /// The merge key: an endpoint is "the same" as another iff its rendered path
     /// and method match. Captures compare by `:name` form, like Servant.
-    fn key(&self) -> (Option<String>, Vec<String>, http::Method) {
+    fn key(&self) -> (Option<String>, Vec<String>, Option<http::Method>) {
         (
             self.host.as_ref().map(|host| host.name.clone()),
             self.path.iter().map(PathPart::render).collect(),
-            self.method.clone(),
+            if self.raw.is_some() {
+                None
+            } else {
+                Some(self.method.clone())
+            },
         )
     }
 
@@ -238,6 +254,9 @@ impl EndpointDoc {
             self.query_string = other.query_string;
         }
         self.deep_queries.extend(other.deep_queries);
+        if self.raw.is_none() {
+            self.raw = other.raw;
+        }
     }
 }
 

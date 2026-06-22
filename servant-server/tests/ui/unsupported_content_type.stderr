@@ -19,6 +19,7 @@ help: the trait `MediaType` is not implemented for `NotAMime`
             PlainText
   = note: required for `(NotAMime,)` to implement `AllMime`
   = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `ServerChain`
+  = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `serve::kind::BuildServerByKind<serve::kind::TypedServer, _>`
   = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `HasServer<_>`
 note: required by a bound in `serve`
  --> src/serve.rs
@@ -46,6 +47,7 @@ help: the trait `MimeRender<NotAMime>` is not implemented for `String`
   = help: for that trait implementation, expected `PlainText`, found `NotAMime`
   = note: required for `(NotAMime,)` to implement `AllMimeRender<String>`
   = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `ServerChain`
+  = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `serve::kind::BuildServerByKind<serve::kind::TypedServer, _>`
   = note: required for `Verb<Get, 200, (NotAMime,), String>` to implement `HasServer<_>`
 note: required by a bound in `serve`
  --> src/serve.rs

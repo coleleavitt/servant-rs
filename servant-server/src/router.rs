@@ -28,6 +28,7 @@ pub trait LeafService: Send + Sync {
     fn call<'a>(
         &'a self,
         req: &'a RequestData,
+        tail: Vec<String>,
         captures: Vec<String>,
         capture_all: Option<Vec<String>>,
     ) -> BoxRouteFuture<'a>;
@@ -154,7 +155,10 @@ pub fn dispatch<'a>(
                 };
                 dispatch(inner, &[], captures, Some(segs), req).await
             }
-            Router::Raw(leaf) => leaf.call(req, captures, capture_all).await,
+            Router::Raw(leaf) => {
+                leaf.call(req, raw_tail(segments), captures, capture_all)
+                    .await
+            }
             Router::Choice(a, b) => {
                 match dispatch(a, segments, captures.clone(), capture_all.clone(), req).await {
                     RouteResult::Route(r) => RouteResult::Route(r),
@@ -180,13 +184,24 @@ async fn run_choice_leaves(
 ) -> RouteResult<http::Response<ResponseBody>> {
     let mut best: Option<ServerError> = None;
     for leaf in leaves {
-        match leaf.call(req, captures.clone(), capture_all.clone()).await {
+        match leaf
+            .call(req, Vec::new(), captures.clone(), capture_all.clone())
+            .await
+        {
             RouteResult::Route(r) => return RouteResult::Route(r),
             RouteResult::FailFatal(e) => return RouteResult::FailFatal(e),
             RouteResult::Fail(e) => best = Some(combine_fail(best, e)),
         }
     }
     RouteResult::Fail(best.unwrap_or_else(not_found))
+}
+
+fn raw_tail(segments: &[String]) -> Vec<String> {
+    if is_empty_path(segments) {
+        Vec::new()
+    } else {
+        segments.to_vec()
+    }
 }
 
 #[cfg(test)]
@@ -227,6 +242,7 @@ mod tests {
             fn call<'a>(
                 &'a self,
                 _req: &'a RequestData,
+                _tail: Vec<String>,
                 _c: Vec<String>,
                 _ca: Option<Vec<String>>,
             ) -> BoxRouteFuture<'a> {

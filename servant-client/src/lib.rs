@@ -27,7 +27,7 @@ pub mod client;
 pub mod request;
 pub mod runclient;
 
-pub use client::{ClientEndpoint, HasClient, MakeClient, client};
+pub use client::{ClientEndpoint, HasClient, HasRawClient, MakeClient, RawClientEndpoint, client};
 pub use request::{BaseUrl, ClientError, ClientRequest, ClientResponse, Scheme};
 #[cfg(feature = "hyper")]
 pub use runclient::HyperClient;

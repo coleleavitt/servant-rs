@@ -132,7 +132,11 @@ pub fn to_openapi(doc: &ApiDoc, info: OpenApiInfo) -> Value {
     // significant — and avoids forcing a workspace-wide feature flag.
     let mut paths: Map<String, Value> = Map::new();
 
-    for endpoint in doc.endpoints() {
+    for endpoint in doc
+        .endpoints()
+        .iter()
+        .filter(|endpoint| endpoint.raw.is_none())
+    {
         let path_key = templated_path(&endpoint.path);
         let method = endpoint.method.as_str().to_ascii_lowercase();
         let operation = operation_for(endpoint);

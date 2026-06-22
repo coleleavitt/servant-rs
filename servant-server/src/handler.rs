@@ -40,6 +40,7 @@ where
     fn call<'a>(
         &'a self,
         req: &'a RequestData,
+        _tail: Vec<String>,
         captures: Vec<String>,
         capture_all: Option<Vec<String>>,
     ) -> BoxRouteFuture<'a> {

@@ -50,6 +50,8 @@ pub mod prelude {
     pub use crate::api::{
         Endpoint,
         HasArgs,
+        Raw,
+        RawM,
         alt,
         auth_protect,
         basic_auth,
@@ -73,6 +75,8 @@ pub mod prelude {
         query_param,
         query_params,
         query_string,
+        raw,
+        raw_m,
         remote_host,
         req_body,
         sse_get,

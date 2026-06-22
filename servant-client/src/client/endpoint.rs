@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use servant::api::{Alt, Endpoint};
+use http::HeaderValue;
+use servant::api::{Description, Endpoint, Fragment, Host, OperationId, Path, Raw, RawM, Summary};
+use servant::hlist::HNil;
+use servant::host::HostRequirement;
 
 use crate::request::{ClientError, ClientRequest, ClientResponse};
 use crate::runclient::RunClient;
@@ -40,6 +43,138 @@ where
     }
 }
 
+/// A callable generated client for `Raw` and `RawM` terminal endpoints.
+pub struct RawClientEndpoint<Api> {
+    pub(crate) chain: Arc<Api>,
+}
+
+/// Client-side request building for opaque raw terminal chains.
+pub trait HasRawClient {
+    /// Arguments consumed by combinators before the raw terminal.
+    type Args;
+
+    /// Build the request prefix before the caller-selected method is applied.
+    fn build_raw_request(&self, args: Self::Args, req: &mut ClientRequest) -> Result<(), String>;
+}
+
+impl<Api> RawClientEndpoint<Api>
+where
+    Api: HasRawClient<Args = HNil>,
+{
+    /// Execute a raw request with the selected method and return the response
+    /// without status or content-type decoding.
+    pub async fn call_raw<T: RunClient>(
+        &self,
+        transport: &T,
+        method: http::Method,
+    ) -> Result<ClientResponse, ClientError> {
+        self.call_raw_with(transport, HNil, method).await
+    }
+}
+
+impl<Api> RawClientEndpoint<Api>
+where
+    Api: HasRawClient,
+{
+    /// Execute a raw request with explicit pre-terminal arguments.
+    pub async fn call_raw_with<T: RunClient>(
+        &self,
+        transport: &T,
+        args: Api::Args,
+        method: http::Method,
+    ) -> Result<ClientResponse, ClientError> {
+        let mut req = ClientRequest::new();
+        self.chain
+            .build_raw_request(args, &mut req)
+            .map_err(|message| ClientError::EncodeFailure { message })?;
+        req.method = method;
+        transport.run_request(req).await
+    }
+}
+
+impl HasRawClient for Raw {
+    type Args = HNil;
+
+    fn build_raw_request(&self, _args: Self::Args, _req: &mut ClientRequest) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl HasRawClient for RawM {
+    type Args = HNil;
+
+    fn build_raw_request(&self, _args: Self::Args, _req: &mut ClientRequest) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl<Next> HasRawClient for Path<Next>
+where
+    Next: HasRawClient,
+{
+    type Args = Next::Args;
+
+    fn build_raw_request(&self, args: Self::Args, req: &mut ClientRequest) -> Result<(), String> {
+        req.append_path(&self.segment);
+        self.next.build_raw_request(args, req)
+    }
+}
+
+impl<Next> HasRawClient for Host<Next>
+where
+    Next: HasRawClient,
+{
+    type Args = Next::Args;
+
+    fn build_raw_request(&self, args: Self::Args, req: &mut ClientRequest) -> Result<(), String> {
+        let required = HostRequirement::parse(self.name.as_str())
+            .map_err(|err| format!("{err}: `{}`", self.name))?;
+        let value = HeaderValue::from_str(required.as_str()).map_err(|err| err.to_string())?;
+        req.headers.insert(http::header::HOST, value);
+        self.next.build_raw_request(args, req)
+    }
+}
+
+macro_rules! metadata_raw_client {
+    ($ty:ident < $($g:ident),+ >) => {
+        impl<$($g),+, Next> HasRawClient for $ty<$($g),+, Next>
+        where
+            Next: HasRawClient,
+        {
+            type Args = Next::Args;
+
+            fn build_raw_request(
+                &self,
+                args: Self::Args,
+                req: &mut ClientRequest,
+            ) -> Result<(), String> {
+                self.next.build_raw_request(args, req)
+            }
+        }
+    };
+    ($ty:ident) => {
+        impl<Next> HasRawClient for $ty<Next>
+        where
+            Next: HasRawClient,
+        {
+            type Args = Next::Args;
+
+            fn build_raw_request(
+                &self,
+                args: Self::Args,
+                req: &mut ClientRequest,
+            ) -> Result<(), String> {
+                self.next.build_raw_request(args, req)
+            }
+        }
+    };
+}
+
+metadata_raw_client!(Description);
+metadata_raw_client!(Summary);
+metadata_raw_client!(OperationId);
+metadata_raw_client!(Fragment<A>);
+
 /// Build a typed client value from an API description: a [`ClientEndpoint`] for a
 /// single endpoint, or a nested tuple mirroring the [`Alt`] structure.
 pub trait MakeClient {
@@ -47,29 +182,6 @@ pub trait MakeClient {
     type Client;
     /// Construct it.
     fn make_client(self) -> Self::Client;
-}
-
-impl<Api> MakeClient for Api
-where
-    Api: HasClient,
-{
-    type Client = ClientEndpoint<Api>;
-    fn make_client(self) -> Self::Client {
-        ClientEndpoint {
-            chain: Arc::new(self),
-        }
-    }
-}
-
-impl<L, R> MakeClient for Alt<L, R>
-where
-    L: MakeClient,
-    R: MakeClient,
-{
-    type Client = (L::Client, R::Client);
-    fn make_client(self) -> Self::Client {
-        (self.left.make_client(), self.right.make_client())
-    }
 }
 
 /// Build a typed client from an API description.

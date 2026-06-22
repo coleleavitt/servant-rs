@@ -47,11 +47,15 @@ fn render_path(path: &[PathPart]) -> String {
 }
 
 fn render_endpoint(ep: &EndpointDoc, lines: &mut Vec<String>) {
-    lines.push(format!(
-        "## {} {}",
-        ep.method.as_str(),
-        render_path(&ep.path)
-    ));
+    if ep.raw.is_some() {
+        lines.push(format!("## OPAQUE {}", render_path(&ep.path)));
+    } else {
+        lines.push(format!(
+            "## {} {}",
+            ep.method.as_str(),
+            render_path(&ep.path)
+        ));
+    }
     lines.push(String::new());
 
     render_notes(ep, lines);
@@ -62,8 +66,11 @@ fn render_endpoint(ep: &EndpointDoc, lines: &mut Vec<String>) {
     render_query_string(ep, lines);
     render_deep_queries(ep, lines);
     render_fragment(ep, lines);
+    render_raw(ep, lines);
     render_request(ep, lines);
-    render_response(ep, lines);
+    if ep.raw.is_none() {
+        render_response(ep, lines);
+    }
 }
 
 fn render_notes(ep: &EndpointDoc, lines: &mut Vec<String>) {
@@ -224,6 +231,23 @@ fn render_request(ep: &EndpointDoc, lines: &mut Vec<String>) {
     for ct in &body.content_types {
         lines.push(format!("    - `{ct}`"));
     }
+    lines.push(String::new());
+}
+
+fn render_raw(ep: &EndpointDoc, lines: &mut Vec<String>) {
+    let Some(raw) = ep.raw else {
+        return;
+    };
+    lines.push("### Raw Endpoint:".to_string());
+    lines.push(String::new());
+    let kind = match raw {
+        crate::model::RawDoc::Raw => "Raw",
+        crate::model::RawDoc::RawM => "RawM",
+    };
+    lines.push(format!(
+        "- `{kind}` is opaque: it accepts every HTTP method and owns the unmatched path tail."
+    ));
+    lines.push("- OpenAPI generation omits this path by default.".to_string());
     lines.push(String::new());
 }
 

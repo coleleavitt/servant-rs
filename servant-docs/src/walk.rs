@@ -62,6 +62,7 @@ use crate::model::{
 };
 
 mod host;
+mod raw;
 mod server;
 
 /// A documentation interpretation of an API description.

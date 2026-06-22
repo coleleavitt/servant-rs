@@ -27,6 +27,18 @@ pub struct StreamVerb<M, const STATUS: u16, Framing, CType, T> {
     pub(crate) _marker: PhantomData<fn() -> (M, Framing, CType, T)>,
 }
 
+/// An opaque terminal endpoint served by a raw HTTP handler.
+///
+/// Raw accepts every HTTP method, owns the unmatched path tail, and bypasses
+/// ordinary typed endpoint method and content negotiation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Raw;
+
+/// A monadic raw terminal endpoint whose handler can read server context and
+/// return a [`crate::error::ServerError`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RawM;
+
 /// A terminal endpoint whose response carries extra headers. The handler returns
 /// [`crate::response::Headers<A>`]; the body is content-negotiated over `CTypes`
 /// (like [`Verb`]) and the headers are attached to the response. A distinct type
@@ -263,6 +275,7 @@ macro_rules! seal {
     };
 }
 seal!(EmptyApi);
+seal!(Raw, RawM);
 impl<M, const STATUS: u16, CTypes, A> sealed::Sealed for Verb<M, STATUS, CTypes, A> {}
 impl<M, const STATUS: u16, CTypes, A> sealed::Sealed for VerbWithHeaders<M, STATUS, CTypes, A> {}
 impl<M, CTypes, Resp> sealed::Sealed for UVerb<M, CTypes, Resp> {}

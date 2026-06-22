@@ -34,6 +34,12 @@ impl<M, CTypes, Resp> HasArgs for UVerb<M, CTypes, Resp> {
 impl<M, const STATUS: u16, Framing, CType, T> HasArgs for StreamVerb<M, STATUS, Framing, CType, T> {
     type Args = HNil;
 }
+impl HasArgs for Raw {
+    type Args = HNil;
+}
+impl HasArgs for RawM {
+    type Args = HNil;
+}
 impl<Next: HasArgs> HasArgs for Path<Next> {
     type Args = Next::Args;
 }

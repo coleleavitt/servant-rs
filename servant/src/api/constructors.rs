@@ -157,6 +157,16 @@ pub fn stream_verb<M, const STATUS: u16, Framing, CType, T>()
     }
 }
 
+/// `Raw` — an opaque terminal endpoint served by a raw HTTP handler.
+pub const fn raw() -> Raw {
+    Raw
+}
+
+/// `RawM` — an opaque raw endpoint with context access and typed errors.
+pub const fn raw_m() -> RawM {
+    RawM
+}
+
 /// `ServerSentEvents` — a `GET` streaming [`crate::stream::ServerEvent`]s as
 /// `text/event-stream`.
 pub fn sse_get() -> StreamVerb<

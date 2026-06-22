@@ -5,7 +5,6 @@
 //! and, for [`Alt`], merges the two sub-routers with the [`choice`]
 //! smart-constructor — left-biased, exactly as Servant's `:<|>`.
 
-use std::future::Future;
 use std::sync::Arc;
 
 use servant::api::{
@@ -36,13 +35,14 @@ use servant::api::{
     WithNamedContext,
     WithResource,
 };
-use servant::error::ServerError;
-use servant::func::HandlerFn;
 
 use crate::context::Context;
-use crate::extract::ServerChain;
-use crate::handler::EndpointLeaf;
 use crate::router::{CaptureHint, Leaf, Router, choice};
+
+mod kind;
+mod raw;
+
+use kind::{BuildServerByKind, ServerKind};
 
 /// Build the routing tree for a single endpoint around `leaf`.
 pub trait RouterShape {
@@ -161,22 +161,12 @@ pub trait HasServer<H> {
     fn into_router(self, handler: H, context: Arc<Context>) -> Router;
 }
 
-impl<Api, H, Fut> HasServer<H> for Api
+impl<Api, H> HasServer<H> for Api
 where
-    Api: ServerChain + RouterShape + Send + Sync + 'static,
-    Api::Args: Send,
-    Api::Output: Send,
-    H: HandlerFn<Api::Args, Output = Fut> + Send + Sync + 'static,
-    Fut: Future<Output = Result<Api::Output, ServerError>> + Send + 'static,
+    Api: ServerKind + BuildServerByKind<<Api as ServerKind>::Kind, H>,
 {
     fn into_router(self, handler: H, context: Arc<Context>) -> Router {
-        let api = Arc::new(self);
-        let leaf: Leaf = Arc::new(EndpointLeaf {
-            chain: api.clone(),
-            handler: Arc::new(handler),
-            context,
-        });
-        api.shape(leaf)
+        self.into_router_for_kind(handler, context)
     }
 }
 
