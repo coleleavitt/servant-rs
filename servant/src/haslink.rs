@@ -65,6 +65,16 @@ impl<M> HasLink for NoContentVerb<M> {
     fn add_to_link(&self, _args: HNil, _link: &mut Link) {}
 }
 
+impl HasLink for crate::api::Raw {
+    type LinkArgs = HNil;
+    fn add_to_link(&self, _args: HNil, _link: &mut Link) {}
+}
+
+impl HasLink for crate::api::RawM {
+    type LinkArgs = HNil;
+    fn add_to_link(&self, _args: HNil, _link: &mut Link) {}
+}
+
 impl<M, const STATUS: u16, CTypes, A> HasLink
     for crate::api::VerbWithHeaders<M, STATUS, CTypes, A>
 {

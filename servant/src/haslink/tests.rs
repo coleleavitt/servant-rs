@@ -9,6 +9,8 @@ use crate::api::{
     query_flag,
     query_param,
     query_string,
+    raw,
+    raw_m,
 };
 use crate::content::Json;
 use crate::hlist::{HCons, HNil, hlist1};
@@ -69,6 +71,24 @@ fn alt_produces_a_link_builder_per_endpoint() {
     let (a, b) = links(api);
     assert_eq!(a.link(HNil).to_uri(), "/a");
     assert_eq!(b.link(hlist1(7u64)).to_uri(), "/b/7");
+}
+
+#[test]
+fn raw_link_terminal_renders_prefix() {
+    let ep = links(path("raw", raw()));
+    assert_eq!(ep.link(HNil).to_uri(), "/raw");
+}
+
+#[test]
+fn raw_m_link_terminal_renders_prefix() {
+    let ep = links(path("rawm", raw_m()));
+    assert_eq!(ep.link(HNil).to_uri(), "/rawm");
+}
+
+#[test]
+fn raw_link_terminal_renders_nested_prefix() {
+    let ep = links(path("api", path("raw", raw())));
+    assert_eq!(ep.link(HNil).to_uri(), "/api/raw");
 }
 
 #[test]

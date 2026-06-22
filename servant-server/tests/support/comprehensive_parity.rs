@@ -126,6 +126,10 @@ pub async fn docs_links_client_and_openapi_agree() {
         link.to_uri(),
         "/parity/42/alpha/beta?seed=yes&filter[author]=Ada%20Lovelace&filter[year]=1843&tag[]=rust&tag[]=servant&active&limit=2#details",
     );
+    let raw_link = servant::haslink::links(path("raw", raw())).link(servant::hlist::HNil);
+    assert_eq!(raw_link.to_uri(), "/raw");
+    let raw_m_link = servant::haslink::links(path("rawm", raw_m())).link(servant::hlist::HNil);
+    assert_eq!(raw_m_link.to_uri(), "/rawm");
 
     let openapi = openapi_for(&full_api!(), OpenApiInfo::new("Parity", "1.0.0"));
     let op = &openapi["paths"]["/parity/{id}/{tail}"]["post"];
