@@ -1,0 +1,18 @@
+error[E0277]: the trait bound `WithResource<u32, Verb<Get, 200, (servant::content::Json,), u32>>: HasClient` is not satisfied
+ --> tests/ui/generated_client_with_resource_unsupported.rs:7:21
+  |
+7 |     let _endpoint = client(api);
+  |                     ^^^^^^^^^^^ the trait `HasClient` is not implemented for `WithResource<u32, Verb<Get, 200, (servant::content::Json,), u32>>`
+  |
+  = help: the following other types implement trait `HasClient`:
+            Capture<A, S, Next>
+            CaptureAll<A, Next>
+            DeepQuery<A, Next>
+            Description<Next>
+            Fragment<A, Next>
+            Header<A, P, S, Next>
+            Host<Next>
+            NoContentVerb<M>
+          and $N others
+  = note: required for `servant::api::Path<WithResource<u32, Verb<Get, 200, (servant::content::Json,), u32>>>` to implement `HasClient`
+  = note: required for `servant::api::Path<WithResource<u32, Verb<Get, 200, (servant::content::Json,), u32>>>` to implement `servant_client::client::BuildClientByKind<servant_client::client::TypedClient>`

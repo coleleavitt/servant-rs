@@ -1,0 +1,18 @@
+error[E0277]: the trait bound `RemoteHost<Verb<Get, 200, (servant::content::PlainText,), String>>: HasClient` is not satisfied
+ --> tests/ui/generated_client_remote_host_unsupported.rs:7:21
+  |
+7 |     let _endpoint = client(api);
+  |                     ^^^^^^^^^^^ the trait `HasClient` is not implemented for `RemoteHost<Verb<Get, 200, (servant::content::PlainText,), String>>`
+  |
+  = help: the following other types implement trait `HasClient`:
+            Capture<A, S, Next>
+            CaptureAll<A, Next>
+            DeepQuery<A, Next>
+            Description<Next>
+            Fragment<A, Next>
+            Header<A, P, S, Next>
+            Host<Next>
+            NoContentVerb<M>
+          and $N others
+  = note: required for `servant::api::Path<RemoteHost<Verb<Get, 200, (servant::content::PlainText,), String>>>` to implement `HasClient`
+  = note: required for `servant::api::Path<RemoteHost<Verb<Get, 200, (servant::content::PlainText,), String>>>` to implement `servant_client::client::BuildClientByKind<servant_client::client::TypedClient>`

@@ -16,6 +16,9 @@ use servant_client::{ClientError, ClientRequest, ClientResponse, RunClient, clie
 use servant_docs::HasDocs;
 use servant_server::{RouterService, serve};
 
+#[path = "support/comprehensive_parity.rs"]
+mod comprehensive_parity;
+
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 struct Item {
     id: u64,
@@ -217,4 +220,14 @@ async fn links_route_to_real_endpoints() {
         .body(Full::new(Bytes::new()))
         .unwrap();
     assert_eq!(svc.handle(req).await.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn comprehensive_parity_covers_new_combinators() {
+    comprehensive_parity::covers_new_combinators().await;
+}
+
+#[tokio::test]
+async fn comprehensive_parity_docs_links_client_and_openapi_agree() {
+    comprehensive_parity::docs_links_client_and_openapi_agree().await;
 }
