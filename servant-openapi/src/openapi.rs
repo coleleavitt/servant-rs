@@ -6,22 +6,19 @@
 //! Operation per `(path, method)`.
 //!
 //! **[diff]** Haskell's servant-swagger derives structural JSON Schemas for
-//! every type and emits `$ref`s into `components/schemas`. The servant-rs docs
-//! model only carries Rust `type_name`s, so schemas are produced inline by the
-//! name-based [`crate::schema_for`] mapping and no `components` section is
-//! generated yet. See [`crate::schema`] for the rationale.
+//! every type and emits `$ref`s into `components/schemas`. The servant-rs
+//! OpenAPI interpretation records [`SchemaDoc`] metadata for typed request and
+//! response bodies when [`crate::ToSchema`] is available, registers compatible
+//! named schemas under `components.schemas`, and keeps the name-based
+//! [`crate::schema_for`] fallback for plain [`ApiDoc`] input.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
-use servant::host::HostPortPolicy;
-use servant_docs::{ApiDoc, EndpointDoc, HostDoc, PathPart};
+use servant_docs::{ApiDoc, PathPart, SchemaDoc};
 
-use crate::parameters::parameters_for;
-use crate::schema::schema_for;
-
-const HOST_EXTENSION: &str = "x-servant-host";
-const HOST_ALTERNATIVES_EXTENSION: &str = "x-servant-host-alternatives";
+use crate::operation::{HOST_ALTERNATIVES_EXTENSION, HOST_EXTENSION, operation_for};
+use crate::walk::HasOpenApi;
 
 /// The `info` block of the generated OpenAPI document.
 ///
@@ -47,6 +44,11 @@ pub enum OpenApiError {
         /// The duplicate OpenAPI `operationId` value.
         operation_id: String,
     },
+    /// Two structural schemas claimed the same component key with different bodies.
+    DuplicateSchemaName {
+        /// The duplicate OpenAPI component schema key.
+        schema_name: String,
+    },
 }
 
 impl std::fmt::Display for OpenApiError {
@@ -54,6 +56,9 @@ impl std::fmt::Display for OpenApiError {
         match self {
             OpenApiError::DuplicateOperationId { operation_id } => {
                 write!(f, "duplicate OpenAPI operationId `{operation_id}`")
+            }
+            OpenApiError::DuplicateSchemaName { schema_name } => {
+                write!(f, "duplicate OpenAPI schema component `{schema_name}`")
             }
         }
     }
@@ -89,10 +94,11 @@ impl OpenApiInfo {
     }
 }
 
-/// Generate an [`servant_docs::HasDocs`] API's OpenAPI document directly.
+/// Generate a typed API's OpenAPI document directly.
 ///
 /// Convenience wrapper over [`to_openapi`] that first reflects `api` into its
-/// [`ApiDoc`] via [`servant_docs::HasDocs::docs`].
+/// [`ApiDoc`] via [`HasOpenApi`], preserving structural schema metadata for
+/// request and response body types that implement [`crate::ToSchema`].
 ///
 /// ```
 /// use servant::prelude::*;
@@ -102,16 +108,16 @@ impl OpenApiInfo {
 /// let doc = openapi_for(&api, OpenApiInfo::new("Demo", "1.0.0"));
 /// assert_eq!(doc["openapi"], "3.0.3");
 /// ```
-pub fn openapi_for<A: servant_docs::HasDocs>(api: &A, info: OpenApiInfo) -> Value {
-    to_openapi(&api.docs(), info)
+pub fn openapi_for<A: HasOpenApi>(api: &A, info: OpenApiInfo) -> Value {
+    to_openapi(&api.openapi_docs(), info)
 }
 
-/// Generate an OpenAPI document and reject duplicate `operationId` metadata.
-pub fn checked_openapi_for<A: servant_docs::HasDocs>(
+/// Generate an OpenAPI document and reject duplicate checked metadata.
+pub fn checked_openapi_for<A: HasOpenApi>(
     api: &A,
     info: OpenApiInfo,
 ) -> Result<Value, OpenApiError> {
-    to_checked_openapi(&api.docs(), info)
+    to_checked_openapi(&api.openapi_docs(), info)
 }
 
 /// Generate an OpenAPI 3.0.3 document from a [`servant_docs::ApiDoc`].
@@ -119,8 +125,9 @@ pub fn checked_openapi_for<A: servant_docs::HasDocs>(
 /// The result is a [`serde_json::Value`] with the shape
 /// `{"openapi":"3.0.3","info":{..},"paths":{..}}`. Endpoints are grouped by
 /// their templated path (captures rendered as `{name}`); each path maps the
-/// lowercased HTTP method to an Operation object. See the module docs for the
-/// `[diff]` notes on schema generation.
+/// lowercased HTTP method to an Operation object. Named structural body schemas
+/// are emitted under `components.schemas`, while type-name-only schema metadata
+/// falls back to inline [`crate::schema_for`] output.
 pub fn to_openapi(doc: &ApiDoc, info: OpenApiInfo) -> Value {
     // Group endpoints sharing a templated path so each path maps several HTTP
     // methods to their operations.
@@ -153,11 +160,20 @@ pub fn to_openapi(doc: &ApiDoc, info: OpenApiInfo) -> Value {
         }
     }
 
-    json!({
-        "openapi": "3.0.3",
-        "info": info.to_json(),
-        "paths": Value::Object(paths),
-    })
+    let mut root = Map::new();
+    root.insert("openapi".into(), json!("3.0.3"));
+    root.insert("info".into(), info.to_json());
+    root.insert("paths".into(), Value::Object(paths));
+
+    let schemas = component_schemas(doc);
+    if !schemas.is_empty() {
+        root.insert(
+            "components".into(),
+            json!({ "schemas": Value::Object(schemas) }),
+        );
+    }
+
+    Value::Object(root)
 }
 
 fn insert_method_operation(methods: &mut Map<String, Value>, method: String, operation: Value) {
@@ -204,6 +220,7 @@ fn same_method_alternative(operation: &Map<String, Value>) -> Value {
 /// Generate an OpenAPI document from a docs model after metadata checks.
 pub fn to_checked_openapi(doc: &ApiDoc, info: OpenApiInfo) -> Result<Value, OpenApiError> {
     check_operation_ids(doc)?;
+    check_schema_components(doc)?;
     Ok(to_openapi(doc, info))
 }
 
@@ -220,6 +237,55 @@ fn check_operation_ids(doc: &ApiDoc) -> Result<(), OpenApiError> {
         }
     }
     Ok(())
+}
+
+fn check_schema_components(doc: &ApiDoc) -> Result<(), OpenApiError> {
+    let mut seen = BTreeMap::new();
+    for schema_doc in schema_docs(doc) {
+        let Some(name) = &schema_doc.component_name else {
+            continue;
+        };
+        let Some(schema) = &schema_doc.schema else {
+            continue;
+        };
+        if let Some(existing) = seen.get(name) {
+            if existing != schema {
+                return Err(OpenApiError::DuplicateSchemaName {
+                    schema_name: name.clone(),
+                });
+            }
+        } else {
+            seen.insert(name.clone(), schema.clone());
+        }
+    }
+    Ok(())
+}
+
+fn component_schemas(doc: &ApiDoc) -> Map<String, Value> {
+    let mut components = Map::new();
+    for schema_doc in schema_docs(doc) {
+        let Some(name) = &schema_doc.component_name else {
+            continue;
+        };
+        let Some(schema) = &schema_doc.schema else {
+            continue;
+        };
+        components
+            .entry(name.clone())
+            .or_insert_with(|| schema.clone());
+    }
+    components
+}
+
+fn schema_docs(doc: &ApiDoc) -> impl Iterator<Item = &SchemaDoc> {
+    doc.endpoints().iter().flat_map(|endpoint| {
+        endpoint
+            .request_body
+            .as_ref()
+            .map(|body| &body.schema)
+            .into_iter()
+            .chain(endpoint.response_schema.as_ref())
+    })
 }
 
 /// Render an endpoint path as an OpenAPI path template.
@@ -243,110 +309,4 @@ fn templated_path(parts: &[PathPart]) -> String {
         }
     }
     out
-}
-
-/// Build the OpenAPI Operation object for a single endpoint.
-fn operation_for(endpoint: &EndpointDoc) -> Value {
-    let mut op = Map::new();
-
-    if let Some(summary) = &endpoint.summary {
-        op.insert("summary".into(), json!(summary));
-    }
-    if let Some(description) = &endpoint.description {
-        op.insert("description".into(), json!(description));
-    }
-    if let Some(operation_id) = &endpoint.operation_id {
-        op.insert("operationId".into(), json!(operation_id));
-    }
-
-    let parameters = parameters_for(endpoint);
-    if !parameters.is_empty() {
-        op.insert("parameters".into(), Value::Array(parameters));
-    }
-
-    if endpoint.query_string.is_some() {
-        op.insert(
-            "x-servant-query-string".into(),
-            json!({
-                "decodedOrderedPairs": true,
-                "rawQuery": "available",
-            }),
-        );
-    }
-
-    if let Some(host) = &endpoint.host {
-        op.insert(HOST_EXTENSION.into(), host_extension(host));
-    }
-
-    if let Some(body) = &endpoint.request_body {
-        op.insert("requestBody".into(), request_body_for(body));
-    }
-
-    op.insert("responses".into(), responses_for(endpoint));
-
-    Value::Object(op)
-}
-
-fn host_extension(host: &HostDoc) -> Value {
-    let mut ext = Map::new();
-    ext.insert("name".into(), json!(host.name));
-    ext.insert("hostnameCaseInsensitive".into(), json!(true));
-    match host.port_policy {
-        HostPortPolicy::IgnoreRequestPort => {
-            ext.insert("portPolicy".into(), json!("ignore-request-port"));
-        }
-        HostPortPolicy::RequireExplicitPort(port) => {
-            ext.insert("portPolicy".into(), json!("explicit-port-must-match"));
-            ext.insert("port".into(), json!(port));
-        }
-    }
-    Value::Object(ext)
-}
-
-/// Build the `requestBody` object for a documented body.
-fn request_body_for(body: &servant_docs::BodyDoc) -> Value {
-    let mut content = Map::new();
-    let schema = schema_for(body.type_name);
-    for media in &body.content_types {
-        content.insert(media_key(media), json!({ "schema": schema.clone() }));
-    }
-    let mut request_body = Map::new();
-    request_body.insert("required".into(), json!(true));
-    request_body.insert("content".into(), Value::Object(content));
-    if body.streaming {
-        request_body.insert("x-servant-streaming-request-body".into(), json!(true));
-    }
-    Value::Object(request_body)
-}
-
-/// Build the `responses` object: a single entry keyed by the declared status.
-///
-/// When `response_types` is empty (a no-content / 204 verb), the response has a
-/// description but no `content`.
-fn responses_for(endpoint: &EndpointDoc) -> Value {
-    let status = endpoint.status.as_u16().to_string();
-
-    let mut response = Map::new();
-    response.insert("description".into(), json!(""));
-
-    if !endpoint.response_types.is_empty() {
-        // No documented response Rust type in the model, so use an untyped
-        // object schema; the media types are what the endpoint negotiates.
-        let mut content = Map::new();
-        for media in &endpoint.response_types {
-            content.insert(media_key(media), json!({ "schema": {} }));
-        }
-        response.insert("content".into(), Value::Object(content));
-    }
-
-    let mut responses = Map::new();
-    responses.insert(status, Value::Object(response));
-    Value::Object(responses)
-}
-
-/// The OpenAPI media-type key for a [`mime::Mime`]: its essence
-/// (`type/subtype`), dropping parameters like `; charset=utf-8` so that, e.g.,
-/// `text/plain; charset=utf-8` keys as `text/plain`.
-fn media_key(media: &mime::Mime) -> String {
-    format!("{}/{}", media.type_(), media.subtype())
 }

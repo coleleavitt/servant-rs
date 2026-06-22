@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use servant::prelude::*;
-use servant_openapi::{OpenApiInfo, openapi_for};
+use servant_openapi::{OpenApiInfo, ToSchema, openapi_for};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 struct Item {
     id: u64,
     name: String,

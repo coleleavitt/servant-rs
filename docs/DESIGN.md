@@ -290,10 +290,12 @@ Built on the same architecture, all tested:
   record `#[derive]` is **[diff]** deferred; the macros capture the practical
   benefit.)
 - **OpenAPI** — `servant-openapi::to_openapi`/`openapi_for` walk the shared
-  `ApiDoc` into an OpenAPI 3.0 document (name-based schemas pending a `ToSchema`
-  derive). Raw and RawM endpoints are documented as opaque in Markdown and
-  omitted from the OpenAPI document by default because they accept all methods
-  and own an untyped tail.
+  `ApiDoc` into an OpenAPI 3.0 document. The OpenAPI-specific walk records
+  `ToSchema` metadata for typed request and response bodies, emits compatible
+  named schemas once under `components.schemas`, and keeps the documented
+  type-name fallback for plain docs-model input. Raw and RawM endpoints are
+  documented as opaque in Markdown and omitted from the OpenAPI document by
+  default because they accept all methods and own an untyped tail.
 
 ## 14. Third pass: full combinator + interpretation parity
 

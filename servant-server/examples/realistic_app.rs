@@ -11,10 +11,10 @@ use servant::hlist;
 use servant::prelude::*;
 use servant_client::{ClientError, ClientRequest, ClientResponse, RunClient, client};
 use servant_docs::{HasDocs, markdown};
-use servant_openapi::{OpenApiInfo, openapi_for};
+use servant_openapi::{OpenApiInfo, ToSchema, openapi_for};
 use servant_server::{BasicAuthCheck, Context, RouterService, layout, serve, serve_with_context};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 struct Account {
     id: u64,
     name: String,
@@ -22,13 +22,13 @@ struct Account {
     trace_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 struct NewTicket {
     title: String,
     tags: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 struct Ticket {
     id: u64,
     title: String,

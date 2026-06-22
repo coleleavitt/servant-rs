@@ -14,7 +14,7 @@ use servant::method::{Delete, Put};
 use servant::prelude::*;
 use servant_client::{ClientError, ClientRequest, ClientResponse, RunClient, client};
 use servant_docs::{HasDocs, markdown};
-use servant_openapi::{OpenApiInfo, openapi_for};
+use servant_openapi::{OpenApiInfo, ToSchema, openapi_for};
 use servant_server::{RouterService, TestClient, layout, serve};
 
 #[path = "todos_crud/store.rs"]
@@ -22,19 +22,19 @@ mod store;
 
 use store::{create_todo, delete_todo, get_todo, list_todos, new_store, update_todo};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 struct Todo {
     id: u64,
     title: String,
     completed: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 struct NewTodo {
     title: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 struct UpdateTodo {
     title: Option<String>,
     completed: Option<bool>,

@@ -17,6 +17,8 @@
 use mime::Mime;
 use servant::host::{HostPortPolicy, HostRequirement};
 
+use crate::schema::SchemaDoc;
+
 /// One segment of an endpoint path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathPart {
@@ -82,6 +84,8 @@ pub struct BodyDoc {
     pub content_types: Vec<Mime>,
     /// The Rust type the body is decoded as.
     pub type_name: &'static str,
+    /// Structural schema metadata, if the interpretation had it available.
+    pub schema: SchemaDoc,
     /// Whether the body is decoded incrementally as a request stream.
     pub streaming: bool,
 }
@@ -125,7 +129,8 @@ pub struct HostDoc {
 }
 
 impl HostDoc {
-    pub(crate) fn from_name(name: &str) -> Self {
+    /// Parse a documented `Host` authority into its comparison policy.
+    pub fn from_name(name: &str) -> Self {
         let parsed = HostRequirement::parse(name);
         let port = parsed.as_ref().ok().and_then(HostRequirement::port);
         let port_policy = parsed.as_ref().ok().map_or(
@@ -168,6 +173,8 @@ pub struct EndpointDoc {
     pub request_body: Option<BodyDoc>,
     /// The response content types negotiated for `Accept` (empty for 204).
     pub response_types: Vec<Mime>,
+    /// Structural response schema metadata, if the interpretation had it available.
+    pub response_schema: Option<SchemaDoc>,
     /// An optional one-line summary (`Summary`).
     pub summary: Option<String>,
     /// An optional longer description (`Description`).
@@ -187,7 +194,7 @@ pub struct EndpointDoc {
 impl EndpointDoc {
     /// A fresh accumulator: empty path, defaulting to `GET /` with status `200`.
     /// The terminal verb overwrites `method`/`status`/`response_types`.
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         EndpointDoc {
             path: Vec::new(),
             method: http::Method::GET,
@@ -197,6 +204,7 @@ impl EndpointDoc {
             host: None,
             request_body: None,
             response_types: Vec::new(),
+            response_schema: None,
             summary: None,
             description: None,
             operation_id: None,
@@ -237,6 +245,9 @@ impl EndpointDoc {
         if self.request_body.is_none() {
             self.request_body = other.request_body;
         }
+        if self.response_schema.is_none() {
+            self.response_schema = other.response_schema;
+        }
         if self.host.is_none() {
             self.host = other.host;
         }
@@ -274,7 +285,7 @@ impl ApiDoc {
     }
 
     /// A document with a single endpoint.
-    pub(crate) fn single(ep: EndpointDoc) -> Self {
+    pub fn single(ep: EndpointDoc) -> Self {
         ApiDoc(vec![ep])
     }
 
@@ -285,7 +296,7 @@ impl ApiDoc {
 
     /// Append `ep`, merging into an existing endpoint with the same
     /// `(path, method)` key (left-biased), else pushing it.
-    pub(crate) fn push(&mut self, ep: EndpointDoc) {
+    pub fn push(&mut self, ep: EndpointDoc) {
         let key = ep.key();
         if let Some(existing) = self.0.iter_mut().find(|e| e.key() == key) {
             existing.combine(ep);
@@ -297,7 +308,7 @@ impl ApiDoc {
     /// Concatenate `other` into `self`, left-biased: `self`'s endpoints keep
     /// precedence; `other`'s are appended/merged in order. This realizes
     /// [`servant::api::Alt`]'s left-to-right, left-wins semantics.
-    pub(crate) fn extend(&mut self, other: ApiDoc) {
+    pub fn extend(&mut self, other: ApiDoc) {
         for ep in other.0 {
             self.push(ep);
         }

@@ -10,7 +10,7 @@ use servant::hlist;
 use servant::prelude::*;
 use servant_client::{ClientError, ClientRequest, ClientResponse, RunClient, client};
 use servant_docs::HasDocs;
-use servant_openapi::{OpenApiInfo, openapi_for};
+use servant_openapi::{OpenApiInfo, ToSchema, openapi_for};
 use servant_server::{RouterService, serve};
 
 async fn call(svc: &RouterService, req: http::Request<Full<Bytes>>) -> (StatusCode, String) {
@@ -176,12 +176,12 @@ async fn content_negotiation_respects_accept_before_client_decoding() {
     assert_eq!(body, "hello");
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 struct NewWidget {
     name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 struct Widget {
     id: u64,
     name: String,

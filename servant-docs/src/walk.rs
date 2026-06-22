@@ -60,6 +60,7 @@ use crate::model::{
     PathPart,
     QueryStringDoc,
 };
+use crate::schema::SchemaDoc;
 
 mod host;
 mod raw;
@@ -288,6 +289,7 @@ where
         acc.request_body = Some(BodyDoc {
             content_types: CTypes::all_media_types(),
             type_name: std::any::type_name::<A>(),
+            schema: SchemaDoc::type_name(std::any::type_name::<A>()),
             streaming: false,
         });
         self.next.docs_walk(acc)

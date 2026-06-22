@@ -33,6 +33,7 @@
 
 mod markdown;
 mod model;
+mod schema;
 mod walk;
 
 pub use markdown::markdown;
@@ -47,7 +48,9 @@ pub use model::{
     ParamKind,
     PathPart,
     QueryStringDoc,
+    RawDoc,
 };
+pub use schema::{SchemaDoc, ToSchema, schema_for, short_name};
 pub use walk::HasDocs;
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 //! share: nothing here re-declares routes. [`to_openapi`] walks a
 //! [`servant_docs::ApiDoc`] and emits a valid OpenAPI 3.0.3 document as a
 //! [`serde_json::Value`]; [`openapi_for`] is the convenience entry point that
-//! reflects a [`servant_docs::HasDocs`] API first.
+//! reflects a typed API with structural schema metadata first.
 //!
 //! ```
 //! use servant::prelude::*;
@@ -22,19 +22,22 @@
 //! ## Schema generation (`[diff]`)
 //!
 //! Haskell servant-swagger derives a full JSON Schema for every type. The
-//! servant-rs documentation model only carries Rust [`std::any::type_name`]
-//! strings, so route generation maps those names to OpenAPI schemas with the
-//! small, name-based [`schema_for`] helper (primitives → their primitive schema,
-//! sequences → untyped arrays, everything else → a titled `object`). Direct
-//! [`ToSchema`] users can derive nested structural schemas for request/response
-//! models; there is no shared `components/schemas` section yet. See [`schema`]
-//! and `docs/DESIGN.md`.
+//! OpenAPI interpretation records [`ToSchema`] metadata for request and response
+//! body types, registers named schemas under `components.schemas`, and uses
+//! `$ref`s from operations. The lower-level [`to_openapi`] function still accepts
+//! a plain [`servant_docs::ApiDoc`] and keeps the documented type-name fallback
+//! through [`schema_for`].
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[doc(hidden)]
+extern crate self as servant_openapi;
+
 mod openapi;
+mod operation;
 mod parameters;
 pub mod schema;
+mod walk;
 
 pub use openapi::{
     OpenApiError,
@@ -46,8 +49,9 @@ pub use openapi::{
 };
 pub use schema::{ToSchema, schema_for};
 /// Derive [`ToSchema`] for a struct: each field becomes an OpenAPI property
-/// (schema inferred from its Rust type name); non-`Option` fields are required.
+/// using that field type's schema; non-`Option` fields are required.
 pub use servant_macros::ToSchema;
+pub use walk::HasOpenApi;
 
 #[cfg(test)]
 mod tests {
@@ -57,18 +61,18 @@ mod tests {
 
     use super::*;
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, ToSchema)]
     struct User {
         id: u64,
         name: String,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, ToSchema)]
     struct NewItem {
         name: String,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, ToSchema)]
     struct Item {
         id: u64,
         name: String,
@@ -77,7 +81,7 @@ mod tests {
     /// A multi-endpoint API exercising captures, query parameters of each kind,
     /// a request body, a non-default success status, multiple response media
     /// types, headers, summaries, and descriptions.
-    fn sample_api() -> impl HasDocs {
+    fn sample_api() -> impl HasDocs + HasOpenApi {
         alt(
             // GET /users/{id}?verbose -> JSON User
             path(
