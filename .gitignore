@@ -11,3 +11,6 @@
 *.profraw
 *.profdata
 .DS_Store
+
+# local dev sqlite db
+*.db
