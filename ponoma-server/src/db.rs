@@ -4,7 +4,15 @@
 use sqlx::Row;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
-use crate::domain::{Position, Quotes, ValuedPortfolio, value_positions};
+use crate::domain::{
+    LedgerTxn,
+    Performance,
+    Position,
+    Quotes,
+    ValuedPortfolio,
+    performance,
+    value_positions,
+};
 
 /// The schema, embedded at compile time. Idempotent (`CREATE TABLE IF NOT EXISTS`), so applying
 /// it on every boot is safe — we run it directly rather than via the `migrate!` macro (which
@@ -242,6 +250,28 @@ impl Db {
                 at: r.get("at"),
             })
             .collect())
+    }
+
+    /// Realized + unrealized P&L for an account (ledger replay + current holdings vs quotes).
+    pub async fn account_performance(
+        &self,
+        account_id: &str,
+        quotes: &Quotes,
+    ) -> Result<Performance, DbError> {
+        let valued = self.value_account(account_id, quotes).await?;
+        let mut txns = self.transactions_for_account(account_id).await?;
+        txns.reverse(); // transactions_for_account is newest-first; performance wants oldest-first
+        let ledger: Vec<LedgerTxn> = txns
+            .into_iter()
+            .map(|t| LedgerTxn {
+                kind: t.kind,
+                ticker: t.ticker,
+                shares: t.shares,
+                price: t.price,
+                amount: t.amount,
+            })
+            .collect();
+        Ok(performance(&ledger, &valued))
     }
 }
 

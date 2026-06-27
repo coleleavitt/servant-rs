@@ -250,6 +250,65 @@ pub fn rebalance_trades(
     trades
 }
 
+/// A ledger transaction (for performance math). `amount` is the signed cash impact.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LedgerTxn {
+    pub kind: String,
+    pub ticker: String,
+    pub shares: f64,
+    pub price: f64,
+    pub amount: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Performance {
+    pub realized_pl: f64,
+    pub unrealized_pl: f64,
+    pub dividends: f64,
+    pub fees: f64,
+    pub total_pl: f64,
+}
+
+/// Realized (average-cost on SELLs + dividends - fees) + unrealized (current holdings vs cost)
+/// P&L for an account from its transaction ledger (oldest->newest) and current valued holdings.
+pub fn performance(txns: &[LedgerTxn], valued: &ValuedPortfolio) -> Performance {
+    let mut shares: BTreeMap<String, f64> = BTreeMap::new();
+    let mut avg_cost: BTreeMap<String, f64> = BTreeMap::new();
+    let mut realized = 0.0;
+    let mut dividends = 0.0;
+    let mut fees = 0.0;
+    for t in txns {
+        let tk = t.ticker.to_uppercase();
+        match t.kind.as_str() {
+            "BUY" => {
+                let s = shares.entry(tk.clone()).or_insert(0.0);
+                let c = avg_cost.entry(tk.clone()).or_insert(0.0);
+                let new_s = *s + t.shares;
+                if new_s > 0.0 {
+                    *c = (*s * *c + t.shares * t.price) / new_s;
+                }
+                *s = new_s;
+            }
+            "SELL" => {
+                let c = avg_cost.get(&tk).copied().unwrap_or(t.price);
+                realized += (t.price - c) * t.shares;
+                *shares.entry(tk).or_insert(0.0) -= t.shares;
+            }
+            "DIVIDEND" => dividends += t.amount.abs(),
+            "FEE" => fees += t.amount.abs(),
+            _ => {}
+        }
+    }
+    realized += dividends - fees;
+    Performance {
+        realized_pl: realized,
+        unrealized_pl: valued.total_gain,
+        dividends,
+        fees,
+        total_pl: realized + valued.total_gain,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +380,50 @@ mod tests {
         assert_eq!(aapl.shares, 20.0); // 8000 -> 6000
         assert_eq!(msft.action, TradeAction::Buy);
         assert_eq!(msft.shares, 20.0); // 2000 -> 4000
+    }
+
+    #[test]
+    fn performance_realized_and_unrealized() {
+        let txns = vec![
+            LedgerTxn {
+                kind: "BUY".into(),
+                ticker: "AAPL".into(),
+                shares: 10.0,
+                price: 100.0,
+                amount: -1000.0,
+            },
+            LedgerTxn {
+                kind: "BUY".into(),
+                ticker: "AAPL".into(),
+                shares: 10.0,
+                price: 200.0,
+                amount: -2000.0,
+            },
+            LedgerTxn {
+                kind: "SELL".into(),
+                ticker: "AAPL".into(),
+                shares: 5.0,
+                price: 300.0,
+                amount: 1500.0,
+            },
+            LedgerTxn {
+                kind: "DIVIDEND".into(),
+                ticker: "AAPL".into(),
+                shares: 0.0,
+                price: 0.0,
+                amount: 50.0,
+            },
+        ];
+        let pos = vec![Position {
+            ticker: "AAPL".into(),
+            shares: 15.0,
+            cost_basis: 150.0,
+        }];
+        let valued = value_positions(&pos, &q(), 0.0);
+        let p = performance(&txns, &valued);
+        assert_eq!(p.realized_pl, 800.0);
+        assert_eq!(p.dividends, 50.0);
+        assert_eq!(p.unrealized_pl, -750.0);
+        assert_eq!(p.total_pl, 50.0);
     }
 }

@@ -23,7 +23,15 @@ use servant_server::{RouterService, serve};
 
 use crate::billing::{FeeResult, FeeSchedule, compute_fee};
 use crate::db::Db;
-use crate::domain::{ModelHolding, Quotes, Trade, TradeAction, ValuedPortfolio, rebalance_trades};
+use crate::domain::{
+    ModelHolding,
+    Performance,
+    Quotes,
+    Trade,
+    TradeAction,
+    ValuedPortfolio,
+    rebalance_trades,
+};
 use crate::mcp;
 use crate::paper::{PaperError, RiskLimits};
 
@@ -237,6 +245,20 @@ macro_rules! ponoma_api {
                     )
                 )
             ),
+            // GET /api/accounts/{id}/performance?q=
+            path(
+                "api",
+                path(
+                    "accounts",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "performance",
+                            query_param::<String, _>("q", get::<(Json,), Performance>())
+                        )
+                    )
+                )
+            ),
         ]
     };
 }
@@ -428,6 +450,18 @@ pub fn router(db: Db) -> RouterService {
         }
     };
 
+    let h_performance = {
+        let db = db.clone();
+        move |aid: String, q: Option<String>| {
+            let db = db.clone();
+            async move {
+                db.account_performance(&aid, &parse_quotes(q))
+                    .await
+                    .map_err(db_err)
+            }
+        }
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree.
     let handlers = (
         h_households,
@@ -447,7 +481,10 @@ pub fn router(db: Db) -> RouterService {
                                     h_billing,
                                     (
                                         h_rebalance,
-                                        (h_create_household, (h_create_account, h_transactions)),
+                                        (
+                                            h_create_household,
+                                            (h_create_account, (h_transactions, h_performance)),
+                                        ),
                                     ),
                                 ),
                             ),
@@ -474,6 +511,7 @@ pub const ROUTES: &[&str] = &[
     "POST /api/households            (create)",
     "POST /api/households/{id}/accounts (create)",
     "GET  /api/accounts/{id}/transactions",
+    "GET  /api/accounts/{id}/performance?q=...",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -590,6 +628,28 @@ mod tests {
         assert_eq!(txns[0]["kind"], "BUY");
         assert_eq!(txns[0]["ticker"], "VTI");
         assert_eq!(txns[0]["amount"], -200.0); // cash out
+    }
+
+    #[tokio::test]
+    async fn account_performance_endpoint() {
+        let c = client().await;
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        let accts: Vec<serde_json::Value> = c
+            .get(&format!("/api/households/{}/accounts", hs[0].id))
+            .await
+            .json();
+        // JTWROS holds AAPL 20@150 + MSFT 10@300; at AAPL=200/MSFT=400 unrealized = 1000+1000 = 2000
+        let aid = accts.iter().find(|a| a["number"] == "JTWROS-001").unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let perf: serde_json::Value = c
+            .get(&format!(
+                "/api/accounts/{aid}/performance?q=AAPL:200,MSFT:400"
+            ))
+            .await
+            .json();
+        assert_eq!(perf["unrealized_pl"], 2000.0);
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.
