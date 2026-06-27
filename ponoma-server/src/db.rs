@@ -1,9 +1,10 @@
 //! sqlx (SQLite) persistence for the ponoma book of record. Runtime queries (no compile-time
 //! DB needed). Connect, migrate, seed, and read the household/account/holding spine.
 
-use crate::domain::{Position, ValuedPortfolio, Quotes, value_positions};
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+
+use crate::domain::{Position, Quotes, ValuedPortfolio, value_positions};
 
 /// The schema, embedded at compile time. Idempotent (`CREATE TABLE IF NOT EXISTS`), so applying
 /// it on every boot is safe — we run it directly rather than via the `migrate!` macro (which
@@ -41,7 +42,10 @@ pub struct Account {
 impl Db {
     /// Connect to a SQLite URL (e.g. "sqlite::memory:" or "sqlite://ponoma.db?mode=rwc").
     pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let pool = SqlitePoolOptions::new().max_connections(5).connect(url).await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect(url)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -64,7 +68,9 @@ impl Db {
             }
             // SAFETY (SqlSafeStr): SCHEMA_SQL is a trusted compile-time constant with no user
             // input — splitting it into statements cannot introduce injection.
-            sqlx::query(sqlx::AssertSqlSafe(s.to_string())).execute(&self.pool).await?;
+            sqlx::query(sqlx::AssertSqlSafe(s.to_string()))
+                .execute(&self.pool)
+                .await?;
         }
         Ok(())
     }
@@ -83,7 +89,10 @@ impl Db {
             .collect())
     }
 
-    pub async fn accounts_for_household(&self, household_id: &str) -> Result<Vec<Account>, DbError> {
+    pub async fn accounts_for_household(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<Account>, DbError> {
         let rows = sqlx::query(
             "SELECT id, household_id, number, account_type, cash, model_id \
              FROM account WHERE household_id = ? ORDER BY number",
@@ -105,10 +114,11 @@ impl Db {
     }
 
     pub async fn positions_for_account(&self, account_id: &str) -> Result<Vec<Position>, DbError> {
-        let rows = sqlx::query("SELECT ticker, shares, cost_basis FROM holding WHERE account_id = ?")
-            .bind(account_id)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query("SELECT ticker, shares, cost_basis FROM holding WHERE account_id = ?")
+                .bind(account_id)
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows
             .into_iter()
             .map(|r| Position {
@@ -120,7 +130,11 @@ impl Db {
     }
 
     /// Value an account from a quote map (its holdings + cash).
-    pub async fn value_account(&self, account_id: &str, quotes: &Quotes) -> Result<ValuedPortfolio, DbError> {
+    pub async fn value_account(
+        &self,
+        account_id: &str,
+        quotes: &Quotes,
+    ) -> Result<ValuedPortfolio, DbError> {
         let positions = self.positions_for_account(account_id).await?;
         let cash: f64 = sqlx::query("SELECT cash FROM account WHERE id = ?")
             .bind(account_id)
@@ -142,7 +156,13 @@ impl Db {
     }
 
     /// Insert an audit event.
-    pub async fn audit(&self, household_id: Option<&str>, action: &str, entity: &str, detail: &str) -> Result<(), DbError> {
+    pub async fn audit(
+        &self,
+        household_id: Option<&str>,
+        action: &str,
+        entity: &str,
+        detail: &str,
+    ) -> Result<(), DbError> {
         sqlx::query(
             "INSERT INTO audit_event (id, household_id, action, entity, detail) VALUES (?, ?, ?, ?, ?)",
         )
@@ -155,4 +175,83 @@ impl Db {
         .await?;
         Ok(())
     }
+
+    /// Create a household; returns its new id.
+    pub async fn create_household(&self, name: &str, advisor_rep: &str) -> Result<String, DbError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO household (id, name, advisor_rep) VALUES (?, ?, ?)")
+            .bind(&id)
+            .bind(name)
+            .bind(advisor_rep)
+            .execute(&self.pool)
+            .await?;
+        self.audit(Some(&id), "created", "household", name).await?;
+        Ok(id)
+    }
+
+    /// Create an account under a household; returns its new id.
+    pub async fn create_account(
+        &self,
+        household_id: &str,
+        number: &str,
+        account_type: &str,
+        cash: f64,
+    ) -> Result<String, DbError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO account (id, household_id, number, account_type, cash) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(household_id)
+        .bind(number)
+        .bind(account_type)
+        .bind(cash)
+        .execute(&self.pool)
+        .await?;
+        self.audit(
+            Some(household_id),
+            "created",
+            "account",
+            &format!("{number} ({account_type})"),
+        )
+        .await?;
+        Ok(id)
+    }
+
+    /// The transaction ledger for an account (newest first).
+    pub async fn transactions_for_account(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<Transaction>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id, kind, ticker, shares, price, amount, at FROM transaction_ledger \
+             WHERE account_id = ? ORDER BY at DESC, id DESC",
+        )
+        .bind(account_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Transaction {
+                id: r.get("id"),
+                kind: r.get("kind"),
+                ticker: r.get("ticker"),
+                shares: r.get("shares"),
+                price: r.get("price"),
+                amount: r.get("amount"),
+                at: r.get("at"),
+            })
+            .collect())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Transaction {
+    pub id: String,
+    pub kind: String,
+    pub ticker: String,
+    pub shares: f64,
+    pub price: f64,
+    pub amount: f64,
+    pub at: String,
 }

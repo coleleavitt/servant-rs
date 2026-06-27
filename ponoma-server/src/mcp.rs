@@ -4,11 +4,12 @@
 //! the domain/db/paper/billing layers. Tool *invocation* still runs through the deterministic
 //! risk gate (paper.rs) — the agent cannot bypass it.
 
-use crate::billing::{compute_fee, FeeBasis, FeeSchedule, FeeTier};
+use serde_json::{Value, json};
+
+use crate::billing::{FeeBasis, FeeSchedule, FeeTier, compute_fee};
 use crate::db::Db;
-use crate::domain::{rebalance_trades, ModelHolding, Quotes, TradeAction};
+use crate::domain::{ModelHolding, Quotes, TradeAction, rebalance_trades};
 use crate::paper::RiskLimits;
-use serde_json::{json, Value};
 
 /// One MCP tool: name + human description + a JSON-schema-ish parameter hint.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,14 +22,46 @@ pub struct Tool {
 /// The ponoma MCP tool catalog (mirrors oat-mcp-server's shape: read tools + action tools).
 pub fn list_tools() -> Vec<Tool> {
     vec![
-        Tool { name: "list-households", description: "List all households in the book", params: &[] },
-        Tool { name: "household-accounts", description: "List accounts in a household", params: &["household_id"] },
-        Tool { name: "account-holdings", description: "Holdings of an account", params: &["account_id"] },
-        Tool { name: "account-value", description: "Value an account from quotes", params: &["account_id", "quotes"] },
-        Tool { name: "household-aum", description: "Total AUM of a household", params: &["household_id", "quotes"] },
-        Tool { name: "rebalance-preview", description: "Preview rebalance trades to a model", params: &["account_id", "model", "quotes"] },
-        Tool { name: "billing-calc", description: "Compute the advisory fee on an AUM", params: &["aum", "schedule"] },
-        Tool { name: "paper-trade", description: "Paper-execute a trade (through the risk gate)", params: &["account_id", "action", "ticker", "shares", "price"] },
+        Tool {
+            name: "list-households",
+            description: "List all households in the book",
+            params: &[],
+        },
+        Tool {
+            name: "household-accounts",
+            description: "List accounts in a household",
+            params: &["household_id"],
+        },
+        Tool {
+            name: "account-holdings",
+            description: "Holdings of an account",
+            params: &["account_id"],
+        },
+        Tool {
+            name: "account-value",
+            description: "Value an account from quotes",
+            params: &["account_id", "quotes"],
+        },
+        Tool {
+            name: "household-aum",
+            description: "Total AUM of a household",
+            params: &["household_id", "quotes"],
+        },
+        Tool {
+            name: "rebalance-preview",
+            description: "Preview rebalance trades to a model",
+            params: &["account_id", "model", "quotes"],
+        },
+        Tool {
+            name: "billing-calc",
+            description: "Compute the advisory fee on an AUM",
+            params: &["aum", "schedule"],
+        },
+        Tool {
+            name: "paper-trade",
+            description: "Paper-execute a trade (through the risk gate)",
+            params: &["account_id", "action", "ticker", "shares", "price"],
+        },
     ]
 }
 
@@ -48,7 +81,11 @@ pub fn tools_list_json() -> Value {
 fn quotes_from(v: &Value) -> Quotes {
     v.get("quotes")
         .and_then(|q| q.as_object())
-        .map(|m| m.iter().filter_map(|(k, val)| val.as_f64().map(|f| (k.to_uppercase(), f))).collect())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, val)| val.as_f64().map(|f| (k.to_uppercase(), f)))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -72,7 +109,11 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
     match name {
         "list-households" => {
             let hs = db.households().await?;
-            Ok(json!(hs.iter().map(|h| json!({"id": h.id, "name": h.name})).collect::<Vec<_>>()))
+            Ok(json!(
+                hs.iter()
+                    .map(|h| json!({"id": h.id, "name": h.name}))
+                    .collect::<Vec<_>>()
+            ))
         }
         "household-accounts" => {
             let hid = arg_str("household_id").ok_or(McpError::MissingArg("household_id"))?;
@@ -96,7 +137,10 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
         "rebalance-preview" => {
             let aid = arg_str("account_id").ok_or(McpError::MissingArg("account_id"))?;
             let quotes = quotes_from(args);
-            let model: Vec<ModelHolding> = args.get("model").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
+            let model: Vec<ModelHolding> = args
+                .get("model")
+                .and_then(|m| serde_json::from_value(m.clone()).ok())
+                .unwrap_or_default();
             let valued = db.value_account(&aid, &quotes).await?;
             let trades = rebalance_trades(&valued, &model, &quotes, 1.0);
             Ok(serde_json::to_value(trades).unwrap_or(json!([])))
@@ -108,11 +152,16 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
         }
         "paper-trade" => {
             let aid = arg_str("account_id").ok_or(McpError::MissingArg("account_id"))?;
-            let action = match arg_str("action").as_deref() { Some("SELL") => TradeAction::Sell, _ => TradeAction::Buy };
+            let action = match arg_str("action").as_deref() {
+                Some("SELL") => TradeAction::Sell,
+                _ => TradeAction::Buy,
+            };
             let ticker = arg_str("ticker").ok_or(McpError::MissingArg("ticker"))?;
             let shares = arg_f64("shares").ok_or(McpError::MissingArg("shares"))?;
             let price = arg_f64("price").ok_or(McpError::MissingArg("price"))?;
-            let fill = db.paper_execute(&aid, action, &ticker, shares, price, &RiskLimits::default()).await?;
+            let fill = db
+                .paper_execute(&aid, action, &ticker, shares, price, &RiskLimits::default())
+                .await?;
             Ok(json!({"order_id": fill.order_id, "shares": fill.shares, "price": fill.price}))
         }
         other => Err(McpError::UnknownTool(other.to_string())),
@@ -127,8 +176,14 @@ fn parse_schedule(v: Option<&Value>) -> FeeSchedule {
     FeeSchedule {
         name: "Standard".into(),
         basis: FeeBasis::Tiered(vec![
-            FeeTier { up_to: 1_000_000.0, rate_pct: 1.0 },
-            FeeTier { up_to: f64::INFINITY, rate_pct: 0.75 },
+            FeeTier {
+                up_to: 1_000_000.0,
+                rate_pct: 1.0,
+            },
+            FeeTier {
+                up_to: f64::INFINITY,
+                rate_pct: 0.75,
+            },
         ]),
         minimum: 1_000.0,
     }
@@ -153,7 +208,13 @@ mod tests {
         let db = bootstrap("sqlite::memory:").await.unwrap();
         let hs = call_tool(&db, "list-households", &json!({})).await.unwrap();
         let hid = hs[0]["id"].as_str().unwrap().to_string();
-        let aum = call_tool(&db, "household-aum", &json!({"household_id": hid, "quotes": {"AAPL": 200.0, "MSFT": 400.0}})).await.unwrap();
+        let aum = call_tool(
+            &db,
+            "household-aum",
+            &json!({"household_id": hid, "quotes": {"AAPL": 200.0, "MSFT": 400.0}}),
+        )
+        .await
+        .unwrap();
         assert_eq!(aum["aum"], 19200.0);
     }
 
@@ -161,8 +222,18 @@ mod tests {
     async fn call_paper_trade_through_gate() {
         let db = bootstrap("sqlite::memory:").await.unwrap();
         let hid = db.households().await.unwrap()[0].id.clone();
-        let accts = call_tool(&db, "household-accounts", &json!({"household_id": hid})).await.unwrap();
-        let aid = accts.as_array().unwrap().iter().find(|a| a["number"] == "INDV-COLE-001").unwrap()["id"].as_str().unwrap().to_string();
+        let accts = call_tool(&db, "household-accounts", &json!({"household_id": hid}))
+            .await
+            .unwrap();
+        let aid = accts
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["number"] == "INDV-COLE-001")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         // small admissible trade
         let res = call_tool(&db, "paper-trade", &json!({"account_id": aid, "action": "BUY", "ticker": "VTI", "shares": 2.0, "price": 200.0})).await.unwrap();
         assert_eq!(res["shares"], 2.0);

@@ -77,6 +77,33 @@ pub struct RebalanceReq {
     pub model: Vec<ModelHolding>,
     pub quotes: std::collections::BTreeMap<String, f64>,
 }
+#[derive(Deserialize)]
+pub struct NewHouseholdReq {
+    pub name: String,
+    #[serde(default)]
+    pub advisor_rep: String,
+}
+#[derive(Deserialize)]
+pub struct NewAccountReq {
+    pub number: String,
+    pub account_type: String,
+    #[serde(default)]
+    pub cash: f64,
+}
+#[derive(Serialize)]
+pub struct CreatedDto {
+    pub id: String,
+}
+#[derive(Serialize)]
+pub struct TransactionDto {
+    pub id: String,
+    pub kind: String,
+    pub ticker: String,
+    pub shares: f64,
+    pub price: f64,
+    pub amount: f64,
+    pub at: String,
+}
 
 /// Parse `?q=AAPL:200,MSFT:400` into a quote map.
 fn parse_quotes(q: Option<String>) -> Quotes {
@@ -175,6 +202,39 @@ macro_rules! ponoma_api {
                 path(
                     "rebalance-preview",
                     req_body::<(Json,), RebalanceReq, _>(post::<(Json,), Vec<Trade>>())
+                )
+            ),
+            // POST /api/households  (create)
+            path(
+                "api",
+                path(
+                    "households",
+                    req_body::<(Json,), NewHouseholdReq, _>(post::<(Json,), CreatedDto>())
+                )
+            ),
+            // POST /api/households/{id}/accounts  (create)
+            path(
+                "api",
+                path(
+                    "households",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "accounts",
+                            req_body::<(Json,), NewAccountReq, _>(post::<(Json,), CreatedDto>())
+                        )
+                    )
+                )
+            ),
+            // GET /api/accounts/{id}/transactions
+            path(
+                "api",
+                path(
+                    "accounts",
+                    capture::<String, _>(
+                        "id",
+                        path("transactions", get::<(Json,), Vec<TransactionDto>>())
+                    )
                 )
             ),
         ]
@@ -319,6 +379,55 @@ pub fn router(db: Db) -> RouterService {
         }
     };
 
+    let h_create_household = {
+        let db = db.clone();
+        move |req: NewHouseholdReq| {
+            let db = db.clone();
+            async move {
+                let id = db
+                    .create_household(&req.name, &req.advisor_rep)
+                    .await
+                    .map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id })
+            }
+        }
+    };
+    let h_create_account = {
+        let db = db.clone();
+        move |hid: String, req: NewAccountReq| {
+            let db = db.clone();
+            async move {
+                let id = db
+                    .create_account(&hid, &req.number, &req.account_type, req.cash)
+                    .await
+                    .map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id })
+            }
+        }
+    };
+    let h_transactions = {
+        let db = db.clone();
+        move |aid: String| {
+            let db = db.clone();
+            async move {
+                let txns = db.transactions_for_account(&aid).await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    txns.into_iter()
+                        .map(|t| TransactionDto {
+                            id: t.id,
+                            kind: t.kind,
+                            ticker: t.ticker,
+                            shares: t.shares,
+                            price: t.price,
+                            amount: t.amount,
+                            at: t.at,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree.
     let handlers = (
         h_households,
@@ -328,7 +437,22 @@ pub fn router(db: Db) -> RouterService {
                 h_aum,
                 (
                     h_holdings,
-                    (h_value, (h_tools, (h_paper, (h_billing, h_rebalance)))),
+                    (
+                        h_value,
+                        (
+                            h_tools,
+                            (
+                                h_paper,
+                                (
+                                    h_billing,
+                                    (
+                                        h_rebalance,
+                                        (h_create_household, (h_create_account, h_transactions)),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
                 ),
             ),
         ),
@@ -347,6 +471,9 @@ pub const ROUTES: &[&str] = &[
     "POST /api/paper-trade",
     "POST /api/billing",
     "POST /api/rebalance-preview",
+    "POST /api/households            (create)",
+    "POST /api/households/{id}/accounts (create)",
+    "GET  /api/accounts/{id}/transactions",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -419,6 +546,50 @@ mod tests {
             .json(&serde_json::json!({"account_id": aid, "action": "BUY", "ticker": "VTI", "shares": 1000.0, "price": 200.0}))
             .send().await;
         assert_eq!(bad.status(), 422); // risk-rejected through the typed API
+    }
+
+    #[tokio::test]
+    async fn create_household_and_account_then_paper_trade_shows_in_ledger() {
+        let c = client().await;
+        // create a new household
+        let created: serde_json::Value = c
+            .request(http::Method::POST, "/api/households")
+            .json(&serde_json::json!({"name": "Friends · Smith", "advisor_rep": "Cole"}))
+            .send()
+            .await
+            .json();
+        let hid = created["id"].as_str().unwrap().to_string();
+
+        // it shows up in the list (now 2 households)
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        assert_eq!(hs.len(), 2);
+
+        // create an account under it
+        let acc: serde_json::Value = c.request(http::Method::POST, &format!("/api/households/{hid}/accounts"))
+            .json(&serde_json::json!({"number": "INDV-SMITH-001", "account_type": "Individual", "cash": 1000.0}))
+            .send().await.json();
+        let aid = acc["id"].as_str().unwrap().to_string();
+
+        // ledger empty before any trade
+        let txns: Vec<serde_json::Value> = c
+            .get(&format!("/api/accounts/{aid}/transactions"))
+            .await
+            .json();
+        assert_eq!(txns.len(), 0);
+
+        // paper-trade (1 sh @ 200 = 200, within 25% of 1000 cash + risk gate), then ledger has it
+        let r = c.request(http::Method::POST, "/api/paper-trade")
+            .json(&serde_json::json!({"account_id": aid, "action": "BUY", "ticker": "VTI", "shares": 1.0, "price": 200.0}))
+            .send().await;
+        assert_eq!(r.status(), 200);
+        let txns: Vec<serde_json::Value> = c
+            .get(&format!("/api/accounts/{aid}/transactions"))
+            .await
+            .json();
+        assert_eq!(txns.len(), 1);
+        assert_eq!(txns[0]["kind"], "BUY");
+        assert_eq!(txns[0]["ticker"], "VTI");
+        assert_eq!(txns[0]["amount"], -200.0); // cash out
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.

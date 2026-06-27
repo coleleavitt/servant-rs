@@ -5,14 +5,11 @@
 
 use std::sync::Arc;
 
-use rmcp::{
-    model::*,
-    service::{RequestContext, RoleServer},
-    transport::stdio,
-    ServerHandler, ServiceExt,
-};
-
-use ponoma_server::{bootstrap, mcp, Db};
+use ponoma_server::{Db, bootstrap, mcp};
+use rmcp::model::*;
+use rmcp::service::{RequestContext, RoleServer};
+use rmcp::transport::stdio;
+use rmcp::{ServerHandler, ServiceExt};
 
 #[derive(Clone)]
 struct PonomaMcp {
@@ -42,10 +39,18 @@ impl ServerHandler for PonomaMcp {
                     .map(|p| (p.to_string(), serde_json::json!({ "type": "string" })))
                     .collect();
                 let schema = serde_json::json!({ "type": "object", "properties": props });
-                Tool::new(t.name, t.description, Arc::new(serde_json::from_value(schema).unwrap()))
+                Tool::new(
+                    t.name,
+                    t.description,
+                    Arc::new(serde_json::from_value(schema).unwrap()),
+                )
             })
             .collect();
-        Ok(ListToolsResult { tools, meta: None, next_cursor: None })
+        Ok(ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
     }
 
     async fn call_tool(
@@ -61,7 +66,11 @@ impl ServerHandler for PonomaMcp {
             Ok(v) => Ok(CallToolResult::success(vec![ContentBlock::text(
                 serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()),
             )])),
-            Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None)),
+            Err(e) => Err(ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                None,
+            )),
         }
     }
 }

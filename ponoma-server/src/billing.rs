@@ -64,7 +64,11 @@ pub fn compute_fee(schedule: &FeeSchedule, aum: f64) -> FeeResult {
     let annual_fee = raw.max(schedule.minimum);
     FeeResult {
         annual_fee,
-        effective_rate_pct: if aum > 0.0 { annual_fee / aum * 100.0 } else { 0.0 },
+        effective_rate_pct: if aum > 0.0 {
+            annual_fee / aum * 100.0
+        } else {
+            0.0
+        },
         quarterly_fee: annual_fee / 4.0,
     }
 }
@@ -77,9 +81,18 @@ mod tests {
         FeeSchedule {
             name: "Standard".into(),
             basis: FeeBasis::Tiered(vec![
-                FeeTier { up_to: 1_000_000.0, rate_pct: 1.0 },
-                FeeTier { up_to: 5_000_000.0, rate_pct: 0.75 },
-                FeeTier { up_to: f64::INFINITY, rate_pct: 0.5 },
+                FeeTier {
+                    up_to: 1_000_000.0,
+                    rate_pct: 1.0,
+                },
+                FeeTier {
+                    up_to: 5_000_000.0,
+                    rate_pct: 0.75,
+                },
+                FeeTier {
+                    up_to: f64::INFINITY,
+                    rate_pct: 0.5,
+                },
             ]),
             minimum: 1_000.0,
         }
@@ -87,7 +100,11 @@ mod tests {
 
     #[test]
     fn flat_fee() {
-        let s = FeeSchedule { name: "Flat".into(), basis: FeeBasis::Flat { rate_pct: 1.0 }, minimum: 0.0 };
+        let s = FeeSchedule {
+            name: "Flat".into(),
+            basis: FeeBasis::Flat { rate_pct: 1.0 },
+            minimum: 0.0,
+        };
         let r = compute_fee(&s, 500_000.0);
         assert_eq!(r.annual_fee, 5_000.0);
         assert_eq!(r.effective_rate_pct, 1.0);

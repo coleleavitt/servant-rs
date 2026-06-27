@@ -2,9 +2,10 @@
 //! This is a REAL household the tool manages (PHILOSOPHY.md) — replaceable/extendable, not a
 //! synthetic client. Friends' households are added the same way.
 
+use uuid::Uuid;
+
 use crate::db::{Db, DbError};
 use crate::domain::AccountType;
-use uuid::Uuid;
 
 fn id() -> String {
     Uuid::new_v4().to_string()
@@ -16,10 +17,12 @@ pub async fn seed_cole_and_angelina(db: &Db) -> Result<(), DbError> {
         return Ok(());
     }
     let hh = id();
-    sqlx::query("INSERT INTO household (id, name, advisor_rep) VALUES (?, 'Cole & Angelina', 'Cole')")
-        .bind(&hh)
-        .execute(&db.pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO household (id, name, advisor_rep) VALUES (?, 'Cole & Angelina', 'Cole')",
+    )
+    .bind(&hh)
+    .execute(&db.pool)
+    .await?;
 
     // two clients in the household
     let cole = id();
@@ -52,11 +55,21 @@ pub async fn seed_cole_and_angelina(db: &Db) -> Result<(), DbError> {
         ("JTWROS-001", AccountType::JointJTWROS, 5000.0),
     ];
     for (num, at, cash) in accounts {
-        let owner = if num.contains("ANG") { &angelina } else { &cole };
+        let owner = if num.contains("ANG") {
+            &angelina
+        } else {
+            &cole
+        };
         seed_account(db, &hh, owner, &custodian, num, *at, *cash).await?;
     }
 
-    db.audit(Some(&hh), "seeded", "household", "Cole & Angelina + 5 accounts").await?;
+    db.audit(
+        Some(&hh),
+        "seeded",
+        "household",
+        "Cole & Angelina + 5 accounts",
+    )
+    .await?;
     Ok(())
 }
 

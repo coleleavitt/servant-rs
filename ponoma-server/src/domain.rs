@@ -1,8 +1,9 @@
 //! Domain types + pure analytics for ponoma's book of record. Mirrors the TS pure-math core
 //! (portfolio/rebalance/tolerance) in Rust so the backend computes identically. No I/O here.
 
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 /// Orion-parity account/registration types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,7 +119,11 @@ pub fn value_positions(positions: &[Position], quotes: &Quotes, cash: f64) -> Va
             (cost, mv, p.shares, gain)
         })
         .collect();
-    let total_value: f64 = priced.iter().map(|(_, mv, _, _)| mv.unwrap_or(0.0)).sum::<f64>() + cash;
+    let total_value: f64 = priced
+        .iter()
+        .map(|(_, mv, _, _)| mv.unwrap_or(0.0))
+        .sum::<f64>()
+        + cash;
     let total_cost: f64 = priced
         .iter()
         .map(|(cost, mv, _, _)| if mv.is_some() { *cost } else { 0.0 })
@@ -133,11 +138,22 @@ pub fn value_positions(positions: &[Position], quotes: &Quotes, cash: f64) -> Va
             cost_basis: p.cost_basis,
             price: quotes.get(&p.ticker.to_uppercase()).copied(),
             market_value: *mv,
-            weight: mv.map(|m| if total_value > 0.0 { m / total_value * 100.0 } else { 0.0 }),
+            weight: mv.map(|m| {
+                if total_value > 0.0 {
+                    m / total_value * 100.0
+                } else {
+                    0.0
+                }
+            }),
             gain: *gain,
         })
         .collect();
-    ValuedPortfolio { positions: vpos, total_value, total_cost, total_gain }
+    ValuedPortfolio {
+        positions: vpos,
+        total_value,
+        total_cost,
+        total_gain,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,8 +195,10 @@ pub fn rebalance_trades(
         .iter()
         .map(|p| (p.ticker.to_uppercase(), p.weight.unwrap_or(0.0)))
         .collect();
-    let target: BTreeMap<String, f64> =
-        model.iter().map(|h| (h.ticker.to_uppercase(), h.target_weight)).collect();
+    let target: BTreeMap<String, f64> = model
+        .iter()
+        .map(|h| (h.ticker.to_uppercase(), h.target_weight))
+        .collect();
 
     let mut tickers: Vec<String> = cur_val.keys().chain(target.keys()).cloned().collect();
     tickers.sort();
@@ -205,10 +223,18 @@ pub fn rebalance_trades(
             continue;
         }
         let traded = shares * price;
-        let post = if delta > 0.0 { cv + traded } else { cv - traded };
+        let post = if delta > 0.0 {
+            cv + traded
+        } else {
+            cv - traded
+        };
         trades.push(Trade {
             ticker: t,
-            action: if delta > 0.0 { TradeAction::Buy } else { TradeAction::Sell },
+            action: if delta > 0.0 {
+                TradeAction::Buy
+            } else {
+                TradeAction::Sell
+            },
             shares,
             amount: traded,
             current_weight: cur_w,
@@ -216,7 +242,11 @@ pub fn rebalance_trades(
             post_trade_weight: post / total * 100.0,
         });
     }
-    trades.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap_or(std::cmp::Ordering::Equal));
+    trades.sort_by(|a, b| {
+        b.amount
+            .partial_cmp(&a.amount)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     trades
 }
 
@@ -225,7 +255,9 @@ mod tests {
     use super::*;
 
     fn q() -> Quotes {
-        [("AAPL".into(), 100.0), ("MSFT".into(), 100.0)].into_iter().collect()
+        [("AAPL".into(), 100.0), ("MSFT".into(), 100.0)]
+            .into_iter()
+            .collect()
     }
 
     #[test]
@@ -238,8 +270,16 @@ mod tests {
     #[test]
     fn values_positions_with_weights() {
         let pos = vec![
-            Position { ticker: "AAPL".into(), shares: 30.0, cost_basis: 100.0 },
-            Position { ticker: "MSFT".into(), shares: 10.0, cost_basis: 100.0 },
+            Position {
+                ticker: "AAPL".into(),
+                shares: 30.0,
+                cost_basis: 100.0,
+            },
+            Position {
+                ticker: "MSFT".into(),
+                shares: 10.0,
+                cost_basis: 100.0,
+            },
         ];
         let v = value_positions(&pos, &q(), 0.0);
         assert_eq!(v.total_value, 4000.0); // 3000 + 1000
@@ -252,13 +292,27 @@ mod tests {
     fn rebalances_to_target() {
         // 80/20 actual -> 60/40 target: sell AAPL, buy MSFT
         let pos = vec![
-            Position { ticker: "AAPL".into(), shares: 80.0, cost_basis: 100.0 },
-            Position { ticker: "MSFT".into(), shares: 20.0, cost_basis: 100.0 },
+            Position {
+                ticker: "AAPL".into(),
+                shares: 80.0,
+                cost_basis: 100.0,
+            },
+            Position {
+                ticker: "MSFT".into(),
+                shares: 20.0,
+                cost_basis: 100.0,
+            },
         ];
         let v = value_positions(&pos, &q(), 0.0);
         let model = vec![
-            ModelHolding { ticker: "AAPL".into(), target_weight: 60.0 },
-            ModelHolding { ticker: "MSFT".into(), target_weight: 40.0 },
+            ModelHolding {
+                ticker: "AAPL".into(),
+                target_weight: 60.0,
+            },
+            ModelHolding {
+                ticker: "MSFT".into(),
+                target_weight: 40.0,
+            },
         ];
         let trades = rebalance_trades(&v, &model, &q(), 1.0);
         let aapl = trades.iter().find(|t| t.ticker == "AAPL").unwrap();
