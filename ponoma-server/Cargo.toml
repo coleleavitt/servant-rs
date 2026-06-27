@@ -10,7 +10,7 @@ servant = { path = "../servant" }
 servant-server = { path = "../servant-server" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 # Local sqlx fork (~/RustProjects/forks/sqlx, 0.9.0). Runtime queries (no compile-time DB).
 sqlx = { path = "../../../forks/sqlx", default-features = false, features = ["runtime-tokio", "sqlite"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -19,10 +19,17 @@ thiserror = "1"
 # Real MCP SDK (local fork) for the stdio server binary.
 rmcp = { path = "../../../forks/rust-sdk/crates/rmcp", features = ["server", "macros", "transport-io"] }
 anyhow = "1"
+# The HTTP binary serves a typed servant API via servant_server::serve_listener
+# (servant's own serving loop) — no hand-rolled hyper.
 
 [[bin]]
 name = "ponoma-mcp"
 path = "src/bin/ponoma_mcp.rs"
 
+[[bin]]
+name = "ponoma-http"
+path = "src/bin/ponoma_http.rs"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+http = "1"

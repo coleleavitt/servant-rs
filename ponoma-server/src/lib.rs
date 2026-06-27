@@ -13,6 +13,7 @@
 pub mod billing;
 pub mod db;
 pub mod domain;
+pub mod http;
 pub mod mcp;
 pub mod paper;
 pub mod seed;
@@ -46,7 +47,9 @@ mod tests {
 
         // value the joint account: AAPL 20@200 + MSFT 10@400 + 5000 cash = 13000
         let joint = accounts.iter().find(|a| a.number == "JTWROS-001").unwrap();
-        let quotes: Quotes = [("AAPL".into(), 200.0), ("MSFT".into(), 400.0)].into_iter().collect();
+        let quotes: Quotes = [("AAPL".into(), 200.0), ("MSFT".into(), 400.0)]
+            .into_iter()
+            .collect();
         let valued = db.value_account(&joint.id, &quotes).await.unwrap();
         assert_eq!(valued.total_value, 4000.0 + 4000.0 + 5000.0);
 
