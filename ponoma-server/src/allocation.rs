@@ -60,6 +60,73 @@ impl ManagedAllocation {
     }
 }
 
+/// The decision policy a strategy imposes on the loop tick, parsed from `strategy.kind` + the
+/// `rules` JSON. Deterministic; absent a strategy the base distress-thesis policy is used.
+#[derive(Clone, Debug, Default)]
+pub struct StrategyPolicy {
+    pub kind: String,
+    /// SELL any name whose distress Z″ proxy is below this (rules: `sellWhenZBelow`).
+    pub sell_when_z_below: Option<f64>,
+    /// cap on the number of distinct holdings the allocation may carry (rules: `maxNames`).
+    pub max_names: Option<usize>,
+    /// only BUYs are allowed (kind = follow-disclosures / rotation buy-side).
+    pub buy_only: bool,
+    /// only SELLs are allowed (kind = tactical-derisk / distress-avoid).
+    pub sell_only: bool,
+}
+
+impl StrategyPolicy {
+    fn from_strategy(s: &Strategy) -> Self {
+        let v: serde_json::Value = serde_json::from_str(&s.rules).unwrap_or(serde_json::Value::Null);
+        let sell_when_z_below = v.get("sellWhenZBelow").and_then(|x| x.as_f64());
+        let max_names = v
+            .get("maxNames")
+            .and_then(|x| x.as_u64())
+            .map(|n| n as usize);
+        // kind-implied side bias (rules can't widen the envelope; this only narrows actions).
+        let (buy_only, sell_only) = match s.kind.as_str() {
+            "distress-avoid" | "tactical-derisk" => (false, true),
+            "follow-disclosures" => (true, false),
+            _ => (
+                v.get("buyOnly").and_then(|x| x.as_bool()).unwrap_or(false),
+                v.get("sellOnly").and_then(|x| x.as_bool()).unwrap_or(false),
+            ),
+        };
+        Self {
+            kind: s.kind.clone(),
+            sell_when_z_below,
+            max_names,
+            buy_only,
+            sell_only,
+        }
+    }
+
+    /// Apply the policy to a base action for one candidate. Returns the (possibly overridden)
+    /// action, or `None` to force HOLD with a reason. `zone` is the distress zone; `held_names`
+    /// is the current distinct-holding count (for the maxNames cap).
+    fn decide(
+        &self,
+        base: Option<TradeAction>,
+        zone: Zone,
+        held_names: usize,
+    ) -> (Option<TradeAction>, Option<&'static str>) {
+        // distress-avoid override: a distress-zone name is sold regardless of the base thesis.
+        if self.sell_when_z_below.is_some() && matches!(zone, Zone::Distress) {
+            return (Some(TradeAction::Sell), Some("strategy: distress sell rule"));
+        }
+        match base {
+            Some(TradeAction::Buy) if self.sell_only => (None, Some("strategy: sell-only")),
+            Some(TradeAction::Sell) if self.buy_only => (None, Some("strategy: buy-only")),
+            Some(TradeAction::Buy)
+                if self.max_names.is_some_and(|m| held_names >= m) =>
+            {
+                (None, Some("strategy: maxNames reached"))
+            }
+            other => (other, None),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentDecision {
     pub id: String,
@@ -281,6 +348,18 @@ impl Db {
             .collect())
     }
 
+    /// Count of distinct tickers currently held (shares > 0) in a paper book — for maxNames.
+    async fn distinct_holdings(&self, account_id: &str) -> Result<usize, DbError> {
+        let n: i64 = sqlx::query(
+            "SELECT COUNT(DISTINCT ticker) AS n FROM holding WHERE account_id = ? AND shares > 0",
+        )
+        .bind(account_id)
+        .fetch_one(&self.pool)
+        .await?
+        .get("n");
+        Ok(n as usize)
+    }
+
     // ── the autonomous loop tick ──────────────────────────────────────────────
     /// Run ONE deterministic loop iteration over `candidates`: for each ticker, synthesize a
     /// thesis from its distress `zone`, decide an action, run the deterministic risk gate, and on
@@ -307,19 +386,41 @@ impl Db {
         }
 
         let limits = alloc.limits();
+        // Load the assigned strategy's policy (deterministic rule layer over the base thesis).
+        let policy = match &alloc.strategy_id {
+            Some(sid) => self
+                .strategies()
+                .await?
+                .into_iter()
+                .find(|s| &s.id == sid)
+                .map(|s| StrategyPolicy::from_strategy(&s)),
+            None => None,
+        };
         let mut results = Vec::new();
 
         for ticker in candidates {
             let t = ticker.to_uppercase();
             let zone = zones.get(&t).copied().unwrap_or(Zone::Unknown);
             let thesis = thesis::synthesize(&t, zone, &[]);
-            let rationale = thesis.rationale.join("; ");
+            let mut rationale = thesis.rationale.join("; ");
 
             // decide: Opportunity → BUY, Avoid → SELL (trim), else HOLD.
-            let action = match thesis.verdict {
+            let base_action = match thesis.verdict {
                 Verdict::Opportunity => Some(TradeAction::Buy),
                 Verdict::Avoid => Some(TradeAction::Sell),
                 _ => None,
+            };
+            // apply the strategy policy (if any): it can override to SELL on distress, force a
+            // side, or block on the maxNames cap. It can only NARROW actions, never widen risk.
+            let action = if let Some(p) = &policy {
+                let held_names = self.distinct_holdings(&alloc.paper_account_id).await?;
+                let (a, why) = p.decide(base_action, zone, held_names);
+                if let Some(reason) = why {
+                    rationale = format!("{rationale}; {reason}");
+                }
+                a
+            } else {
+                base_action
             };
             let Some(action) = action else {
                 self.log_decision(allocation_id, "decide", &t, "HOLD", 0.0, &rationale, thesis.confidence, false, "no actionable edge")
@@ -451,5 +552,43 @@ mod tests {
             .unwrap();
         let all = db.strategies().await.unwrap();
         assert!(all.iter().any(|s| s.id == id && s.name == "Distress Avoid"));
+    }
+
+    #[tokio::test]
+    async fn strategy_policy_overrides_the_tick() {
+        // a distress-avoid (sell-only) strategy must block a safe-zone BUY.
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        let hh = &db.households().await.unwrap()[0].id;
+        let sid = db
+            .create_strategy("Defensive", "distress-avoid", "sell-only", None, r#"{"sellWhenZBelow":1.8}"#)
+            .await
+            .unwrap();
+        let alloc_id = db
+            .create_allocation(hh, "Defensive Alloc", "capital preservation", 2, 100_000.0, None, Some(&sid))
+            .await
+            .unwrap();
+
+        let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
+        let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
+        let results = db
+            .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes)
+            .await
+            .unwrap();
+        // base thesis says BUY (safe → opportunity), but the sell-only policy forces HOLD.
+        assert_eq!(results[0].action, "HOLD");
+        assert!(!results[0].filled);
+        let decisions = db.decisions_for_allocation(&alloc_id, 10).await.unwrap();
+        assert!(decisions.iter().any(|d| d.thesis.contains("sell-only")));
+
+        // and a distress-zone name is SOLD per the rule (after we give it something to sell):
+        // distress override fires even though there's nothing held — it proposes SELL, which the
+        // gate then rejects (no shares), proving the rule path runs.
+        let zones2 = HashMap::from([("XYZ".to_string(), Zone::Distress)]);
+        let quotes2: Quotes = [("XYZ".to_string(), 50.0)].into_iter().collect();
+        let r2 = db
+            .run_loop_tick(&alloc_id, &["XYZ".to_string()], &zones2, &quotes2)
+            .await
+            .unwrap();
+        assert_eq!(r2[0].action, "SELL", "distress rule should propose a SELL");
     }
 }

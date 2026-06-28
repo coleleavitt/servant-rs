@@ -239,6 +239,19 @@ pub struct SetActiveReq {
     pub active: bool,
 }
 #[derive(Serialize)]
+pub struct ImprovementDto {
+    pub id: String,
+    pub strategy_id: Option<String>,
+    pub rationale: String,
+    pub current_rules: String,
+    pub proposed_rules: String,
+    pub status: String,
+}
+#[derive(Deserialize)]
+pub struct ResolveImprovementReq {
+    pub approve: bool,
+}
+#[derive(Serialize)]
 pub struct CapabilityDto {
     pub capability: String,
     pub allowed: bool,
@@ -609,6 +622,36 @@ macro_rules! ponoma_api {
                         path(
                             "active",
                             req_body::<(Json,), SetActiveReq, _>(post::<(Json,), CreatedDto>())
+                        )
+                    )
+                )
+            ),
+            // POST /api/allocations/{id}/self-improve  (propose a refinement from outcomes)
+            path(
+                "api",
+                path(
+                    "allocations",
+                    capture::<String, _>("id", path("self-improve", post::<(Json,), CreatedDto>()))
+                )
+            ),
+            // GET /api/allocations/{id}/improvements
+            path(
+                "api",
+                path(
+                    "allocations",
+                    capture::<String, _>("id", path("improvements", get::<(Json,), Vec<ImprovementDto>>()))
+                )
+            ),
+            // POST /api/improvements/{id}/resolve  (human approve/reject)
+            path(
+                "api",
+                path(
+                    "improvements",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "resolve",
+                            req_body::<(Json,), ResolveImprovementReq, _>(post::<(Json,), CreatedDto>())
                         )
                     )
                 )
@@ -1129,6 +1172,48 @@ pub fn router(db: Db) -> RouterService {
             }
         }
     };
+    // RSI (rails-respecting): propose a refinement from outcomes, list proposals, approve/reject.
+    let h_propose_improvement = {
+        let db = db.clone();
+        move |aid: String| {
+            let db = db.clone();
+            async move {
+                let id = db.propose_improvement(&aid).await.map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id: id.unwrap_or_default() })
+            }
+        }
+    };
+    let h_improvements = {
+        let db = db.clone();
+        move |aid: String| {
+            let db = db.clone();
+            async move {
+                let ims = db.improvements_for_allocation(&aid).await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    ims.into_iter()
+                        .map(|i| ImprovementDto {
+                            id: i.id,
+                            strategy_id: i.strategy_id,
+                            rationale: i.rationale,
+                            current_rules: i.current_rules,
+                            proposed_rules: i.proposed_rules,
+                            status: i.status,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+    let h_resolve_improvement = {
+        let db = db.clone();
+        move |iid: String, req: ResolveImprovementReq| {
+            let db = db.clone();
+            async move {
+                db.resolve_improvement(&iid, req.approve).await.map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id: iid })
+            }
+        }
+    };
 
     // Handler tuple, right-nested to mirror the alt_all! tree (order = route declaration order).
     let handlers = (
@@ -1173,7 +1258,7 @@ pub fn router(db: Db) -> RouterService {
                                                                                 h_jobs,
                                                                                 (
                                                                                     h_comm_models,
-                                                                                    (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_allocations, (h_create_allocation, (h_decisions, (h_loop_tick, h_set_active)))))))))))),
+                                                                                    (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_allocations, (h_create_allocation, (h_decisions, (h_loop_tick, (h_set_active, (h_propose_improvement, (h_improvements, h_resolve_improvement)))))))))))))))),
                                                                                 ),
                                                                             ),
                                                                         ),
@@ -1191,7 +1276,6 @@ pub fn router(db: Db) -> RouterService {
                         ),
                     ),
                 ),
-            ),
             ),
         ),
     );
@@ -1233,6 +1317,9 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/allocations/{id}/decisions",
     "POST /api/allocations/{id}/tick        (run one agent loop iteration)",
     "POST /api/allocations/{id}/active      (kill switch)",
+    "POST /api/allocations/{id}/self-improve (propose a refinement)",
+    "GET  /api/allocations/{id}/improvements",
+    "POST /api/improvements/{id}/resolve    (human approve/reject)",
 ];
 
 // Re-export Arc so the binary can share the service if needed.

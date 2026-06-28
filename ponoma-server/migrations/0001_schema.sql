@@ -194,3 +194,19 @@ CREATE TABLE IF NOT EXISTS agent_decision (
 
 CREATE INDEX IF NOT EXISTS idx_alloc_household ON managed_allocation(household_id);
 CREATE INDEX IF NOT EXISTS idx_decision_alloc ON agent_decision(allocation_id);
+
+-- Recursive self-improvement (CONCEPT.md §7), behind the rails: the agent PROPOSES a strategy
+-- rule refinement learned from an allocation's decision-log outcomes. Nothing auto-applies — a
+-- proposal stays PROPOSED until a human APPROVES it, which bumps the strategy to a new version.
+-- Paper-only, fully audited, halted by the kill switch.
+CREATE TABLE IF NOT EXISTS proposed_improvement (
+  id            TEXT PRIMARY KEY,
+  allocation_id TEXT NOT NULL REFERENCES managed_allocation(id) ON DELETE CASCADE,
+  strategy_id   TEXT REFERENCES strategy(id) ON DELETE SET NULL,
+  rationale     TEXT NOT NULL DEFAULT '',
+  current_rules TEXT NOT NULL DEFAULT '{}',
+  proposed_rules TEXT NOT NULL DEFAULT '{}',
+  status        TEXT NOT NULL DEFAULT 'PROPOSED',  -- PROPOSED / APPROVED / REJECTED
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_improvement_alloc ON proposed_improvement(allocation_id);

@@ -23,6 +23,7 @@ pub mod proposal;
 pub mod prospect;
 pub mod roles;
 pub mod seed;
+pub mod selfimprove;
 pub mod servicing;
 pub mod thesis;
 pub mod verify;
