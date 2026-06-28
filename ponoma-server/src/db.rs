@@ -4,7 +4,7 @@
 use sqlx::Row;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
-use crate::agent::{HarvestPlan, propose_harvest};
+use crate::agent::{AdvisorReview, HarvestPlan, ReviewInputs, advisor_review, propose_harvest};
 use crate::domain::{
     AccountType,
     LedgerTxn,
@@ -299,6 +299,39 @@ impl Db {
             min_loss_pct,
             &RiskLimits::default(),
         ))
+    }
+
+    /// Run the AX-AI advisor review on an account: gather valuation + harvest plan + cash, then
+    /// produce a prioritized recommendation list.
+    pub async fn advisor_review(
+        &self,
+        account_id: &str,
+        quotes: &Quotes,
+    ) -> Result<AdvisorReview, DbError> {
+        let valued = self.value_account(account_id, quotes).await?;
+        let type_str: String = sqlx::query("SELECT account_type FROM account WHERE id = ?")
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| r.get::<String, _>("account_type"))
+            .unwrap_or_else(|| "Individual".to_string());
+        let at = AccountType::from_str_name(&type_str);
+        let cash: f64 = sqlx::query("SELECT cash FROM account WHERE id = ?")
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| r.get::<f64, _>("cash"))
+            .unwrap_or(0.0);
+        let harvest = self.harvest_plan(account_id, quotes, -5.0).await?;
+        let inp = ReviewInputs {
+            account_type: at,
+            valued: &valued,
+            harvest: &harvest,
+            concentration_pct: 40.0,
+            cash_drag_pct: 10.0,
+            cash,
+        };
+        Ok(advisor_review(&inp))
     }
 }
 

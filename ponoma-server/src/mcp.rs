@@ -184,6 +184,11 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
             let plan = db.harvest_plan(&aid, &quotes_from(args), -5.0).await?;
             Ok(serde_json::to_value(plan).unwrap_or(json!(null)))
         }
+        "advisor-review" => {
+            let aid = arg_str("account_id").ok_or(McpError::MissingArg("account_id"))?;
+            let review = db.advisor_review(&aid, &quotes_from(args)).await?;
+            Ok(serde_json::to_value(review).unwrap_or(json!(null)))
+        }
         other => Err(McpError::UnknownTool(other.to_string())),
     }
 }

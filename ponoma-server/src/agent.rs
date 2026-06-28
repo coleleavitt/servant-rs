@@ -102,6 +102,101 @@ pub fn propose_harvest(
     }
 }
 
+// ── AX-AI advisor agent: a deterministic review loop over an account ──────────
+
+/// One recommended action the agent surfaces, with priority + risk-gate status.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Recommendation {
+    pub kind: String, // "rebalance" | "harvest" | "concentration" | "cash-drag"
+    pub priority: u8, // 1 (highest) .. 5
+    pub detail: String,
+    pub admissible: bool, // a concrete action exists that clears the risk gate
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AdvisorReview {
+    pub account_type: String,
+    pub recommendations: Vec<Recommendation>,
+}
+
+/// Inputs the agent reasons over (gathered by the caller from the DB/tools).
+pub struct ReviewInputs<'a> {
+    pub account_type: AccountType,
+    pub valued: &'a ValuedPortfolio,
+    pub harvest: &'a HarvestPlan,
+    /// max single-position weight (%) before flagging concentration risk.
+    pub concentration_pct: f64,
+    /// cash weight (%) above which idle-cash drag is flagged.
+    pub cash_drag_pct: f64,
+    /// portfolio cash as a fraction already included in valued.total_value.
+    pub cash: f64,
+}
+
+/// Run the deterministic advisor review: produce a prioritized recommendation list. The agent
+/// only RECOMMENDS — each item notes whether a gate-clearing action exists, but nothing executes
+/// here. An LLM narrates around this; the priorities + admissibility are pure.
+pub fn advisor_review(inp: &ReviewInputs) -> AdvisorReview {
+    let mut recs = vec![];
+
+    // 1) harvestable losses (taxable only) — high priority, admissibility from the plan.
+    if inp.harvest.eligible && !inp.harvest.proposals.is_empty() {
+        let admissible = inp.harvest.proposals.iter().any(|p| p.admissible);
+        recs.push(Recommendation {
+            kind: "harvest".into(),
+            priority: 2,
+            detail: format!(
+                "{} position(s) at a loss — {:.0} harvestable",
+                inp.harvest.proposals.len(),
+                inp.harvest.total_harvestable_loss
+            ),
+            admissible,
+        });
+    }
+
+    // 2) concentration risk — any single holding above the threshold.
+    if let Some(top) = inp
+        .valued
+        .positions
+        .iter()
+        .filter_map(|p| p.weight.map(|w| (p.ticker.clone(), w)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        if top.1 > inp.concentration_pct {
+            recs.push(Recommendation {
+                kind: "concentration".into(),
+                priority: 1,
+                detail: format!(
+                    "{} is {:.0}% of the account — above the {:.0}% concentration limit",
+                    top.0, top.1, inp.concentration_pct
+                ),
+                admissible: true, // trimming is always gate-admissible (sell of held shares)
+            });
+        }
+    }
+
+    // 3) cash drag — idle cash above threshold.
+    if inp.valued.total_value > 0.0 {
+        let cash_w = inp.cash / inp.valued.total_value * 100.0;
+        if cash_w > inp.cash_drag_pct {
+            recs.push(Recommendation {
+                kind: "cash-drag".into(),
+                priority: 3,
+                detail: format!(
+                    "{:.0}% idle cash — above the {:.0}% target; consider deploying",
+                    cash_w, inp.cash_drag_pct
+                ),
+                admissible: true,
+            });
+        }
+    }
+
+    recs.sort_by_key(|r| r.priority);
+    AdvisorReview {
+        account_type: inp.account_type.as_str().to_string(),
+        recommendations: recs,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +293,66 @@ mod tests {
         );
         assert_eq!(plan.proposals.len(), 1);
         assert!(!plan.proposals[0].admissible); // gate caught the oversized sell
+    }
+    #[test]
+    fn advisor_flags_concentration_and_harvest() {
+        // AAPL 90% (loss), MSFT 10% — taxable
+        let pos = vec![
+            Position {
+                ticker: "AAPL".into(),
+                shares: 90.0,
+                cost_basis: 200.0,
+            },
+            Position {
+                ticker: "MSFT".into(),
+                shares: 10.0,
+                cost_basis: 50.0,
+            },
+        ];
+        let q: Quotes = [("AAPL".into(), 100.0), ("MSFT".into(), 100.0)]
+            .into_iter()
+            .collect();
+        let valued = value_positions(&pos, &q, 0.0);
+        let limits = RiskLimits {
+            max_order_frac: 1.0,
+            allow_short: false,
+            max_cash_use_frac: 1.0,
+        };
+        let harvest = propose_harvest(AccountType::Individual, &valued, -5.0, &limits);
+        let inp = ReviewInputs {
+            account_type: AccountType::Individual,
+            valued: &valued,
+            harvest: &harvest,
+            concentration_pct: 40.0,
+            cash_drag_pct: 10.0,
+            cash: 0.0,
+        };
+        let r = advisor_review(&inp);
+        // concentration is priority 1 (first), harvest priority 2
+        assert_eq!(r.recommendations[0].kind, "concentration");
+        assert!(r.recommendations.iter().any(|x| x.kind == "harvest"));
+    }
+
+    #[test]
+    fn advisor_flags_cash_drag() {
+        let pos = vec![Position {
+            ticker: "AAPL".into(),
+            shares: 10.0,
+            cost_basis: 100.0,
+        }];
+        let q: Quotes = [("AAPL".into(), 100.0)].into_iter().collect();
+        // 1000 in AAPL + 4000 cash = 5000 → 80% cash
+        let valued = value_positions(&pos, &q, 4000.0);
+        let harvest = propose_harvest(AccountType::RothIRA, &valued, -5.0, &RiskLimits::default());
+        let inp = ReviewInputs {
+            account_type: AccountType::RothIRA,
+            valued: &valued,
+            harvest: &harvest,
+            concentration_pct: 90.0,
+            cash_drag_pct: 10.0,
+            cash: 4000.0,
+        };
+        let r = advisor_review(&inp);
+        assert!(r.recommendations.iter().any(|x| x.kind == "cash-drag"));
     }
 }

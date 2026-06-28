@@ -21,7 +21,7 @@ use servant::alt_all;
 use servant::prelude::*;
 use servant_server::{RouterService, serve};
 
-use crate::agent::HarvestPlan;
+use crate::agent::{AdvisorReview, HarvestPlan};
 use crate::billing::{FeeResult, FeeSchedule, compute_fee};
 use crate::db::Db;
 use crate::domain::{
@@ -290,6 +290,20 @@ macro_rules! ponoma_api {
                     )
                 )
             ),
+            // GET /api/accounts/{id}/review?q=  (AX-AI advisor agent)
+            path(
+                "api",
+                path(
+                    "accounts",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "review",
+                            query_param::<String, _>("q", get::<(Json,), AdvisorReview>())
+                        )
+                    )
+                )
+            ),
         ]
     };
 }
@@ -509,6 +523,18 @@ pub fn router(db: Db) -> RouterService {
         Ok::<_, ServerError>(synthesize(&req.ticker, req.zone, &req.signals))
     };
 
+    let h_review = {
+        let db = db.clone();
+        move |aid: String, q: Option<String>| {
+            let db = db.clone();
+            async move {
+                db.advisor_review(&aid, &parse_quotes(q))
+                    .await
+                    .map_err(db_err)
+            }
+        }
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree.
     let handlers = (
         h_households,
@@ -534,7 +560,10 @@ pub fn router(db: Db) -> RouterService {
                                                 h_create_household,
                                                 (
                                                     h_create_account,
-                                                    (h_transactions, (h_performance, h_harvest)),
+                                                    (
+                                                        h_transactions,
+                                                        (h_performance, (h_harvest, h_review)),
+                                                    ),
                                                 ),
                                             ),
                                         ),
@@ -567,6 +596,7 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/accounts/{id}/performance?q=...",
     "GET  /api/accounts/{id}/harvest?q=...   (TLH agent)",
     "POST /api/thesis                       (ecosystem agent)",
+    "GET  /api/accounts/{id}/review?q=...    (advisor agent)",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -723,6 +753,32 @@ mod tests {
         let t: serde_json::Value = r.json();
         assert_eq!(t["verdict"], "Avoid");
         assert_eq!(t["ticker"], "WSHP");
+    }
+
+    #[tokio::test]
+    async fn advisor_review_endpoint() {
+        let c = client().await;
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        let accts: Vec<serde_json::Value> = c
+            .get(&format!("/api/households/{}/accounts", hs[0].id))
+            .await
+            .json();
+        // JTWROS: AAPL 20@150 + MSFT 10@300; crash AAPL to flag concentration + harvest
+        let aid = accts.iter().find(|a| a["number"] == "JTWROS-001").unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r: serde_json::Value = c
+            .get(&format!("/api/accounts/{aid}/review?q=AAPL:50,MSFT:100"))
+            .await
+            .json();
+        let kinds: Vec<&str> = r["recommendations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["kind"].as_str().unwrap())
+            .collect();
+        assert!(kinds.contains(&"harvest") || kinds.contains(&"concentration"));
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.
