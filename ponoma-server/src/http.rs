@@ -992,7 +992,12 @@ mod tests {
             .await;
         let after: Vec<serde_json::Value> = c.get("/api/audit").await.json();
         assert!(after.len() > events.len());
-        assert_eq!(after[0]["action"], "created"); // newest first
+        // the new household's create event is present (ordering within a 1s tick is not asserted).
+        assert!(
+            after
+                .iter()
+                .any(|e| e["action"] == "created" && e["detail"] == "Audit Test")
+        );
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.
