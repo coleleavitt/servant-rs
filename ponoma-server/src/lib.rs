@@ -12,6 +12,7 @@
 
 pub mod agent;
 pub mod billing;
+pub mod communities;
 pub mod db;
 pub mod domain;
 pub mod http;
@@ -20,6 +21,7 @@ pub mod paper;
 pub mod proposal;
 pub mod roles;
 pub mod seed;
+pub mod servicing;
 pub mod thesis;
 pub mod verify;
 

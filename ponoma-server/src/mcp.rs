@@ -199,6 +199,15 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
             let p = db.proposal(&aid, &name, &model, &quotes_from(args)).await?;
             Ok(serde_json::to_value(p).unwrap_or(json!(null)))
         }
+        "marketplace-models" => {
+            let q = arg_str("query").unwrap_or_default();
+            let models = crate::communities::seed_models();
+            let out = crate::communities::search(&models, &q)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            Ok(serde_json::to_value(out).unwrap_or(json!([])))
+        }
         other => Err(McpError::UnknownTool(other.to_string())),
     }
 }

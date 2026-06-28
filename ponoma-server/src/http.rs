@@ -23,6 +23,13 @@ use servant_server::{RouterService, serve};
 
 use crate::agent::{AdvisorReview, HarvestPlan};
 use crate::billing::{FeeResult, FeeSchedule, compute_fee};
+use crate::communities::{
+    ModelComparison,
+    StrategistModel,
+    compare as community_compare,
+    search as community_search,
+    seed_models,
+};
 use crate::db::Db;
 use crate::domain::{
     ModelHolding,
@@ -36,6 +43,7 @@ use crate::domain::{
 use crate::mcp;
 use crate::paper::{PaperError, RiskLimits};
 use crate::proposal::Proposal;
+use crate::servicing::{ScheduledJob, TOPICS, default_jobs};
 use crate::thesis::{Signal as ThesisSignal, Thesis, Zone, synthesize};
 
 // ── wire DTOs (Serialize/Deserialize for Json) ───────────────────────────────
@@ -87,6 +95,11 @@ pub struct RebalanceReq {
     pub account_id: String,
     pub model: Vec<ModelHolding>,
     pub quotes: std::collections::BTreeMap<String, f64>,
+}
+#[derive(Deserialize)]
+pub struct CompareReq {
+    pub a: StrategistModel,
+    pub b: StrategistModel,
 }
 #[derive(Deserialize)]
 pub struct ProposalReq {
@@ -317,6 +330,41 @@ macro_rules! ponoma_api {
                             "review",
                             query_param::<String, _>("q", get::<(Json,), AdvisorReview>())
                         )
+                    )
+                )
+            ),
+            // GET /api/servicing/topics
+            path(
+                "api",
+                path("servicing", path("topics", get::<(Json,), Vec<String>>()))
+            ),
+            // GET /api/servicing/jobs
+            path(
+                "api",
+                path(
+                    "servicing",
+                    path("jobs", get::<(Json,), Vec<ScheduledJob>>())
+                )
+            ),
+            // GET /api/communities/models?q=
+            path(
+                "api",
+                path(
+                    "communities",
+                    path(
+                        "models",
+                        query_param::<String, _>("q", get::<(Json,), Vec<StrategistModel>>())
+                    )
+                )
+            ),
+            // POST /api/communities/compare
+            path(
+                "api",
+                path(
+                    "communities",
+                    path(
+                        "compare",
+                        req_body::<(Json,), CompareReq, _>(post::<(Json,), ModelComparison>())
                     )
                 )
             ),
@@ -568,6 +616,21 @@ pub fn router(db: Db) -> RouterService {
         }
     };
 
+    let h_topics =
+        || async { Ok::<_, ServerError>(TOPICS.iter().map(|t| t.to_string()).collect::<Vec<_>>()) };
+    let h_jobs = || async { Ok::<_, ServerError>(default_jobs()) };
+    let h_comm_models = move |q: Option<String>| async move {
+        let models = seed_models();
+        let filtered = community_search(&models, q.as_deref().unwrap_or(""))
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok::<_, ServerError>(filtered)
+    };
+    let h_comm_compare = move |req: CompareReq| async move {
+        Ok::<_, ServerError>(community_compare(&req.a, &req.b))
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree (order = route declaration order).
     let handlers = (
         h_households,
@@ -597,7 +660,25 @@ pub fn router(db: Db) -> RouterService {
                                                         h_create_account,
                                                         (
                                                             h_transactions,
-                                                            (h_performance, (h_harvest, h_review)),
+                                                            (
+                                                                h_performance,
+                                                                (
+                                                                    h_harvest,
+                                                                    (
+                                                                        h_review,
+                                                                        (
+                                                                            h_topics,
+                                                                            (
+                                                                                h_jobs,
+                                                                                (
+                                                                                    h_comm_models,
+                                                                                    h_comm_compare,
+                                                                                ),
+                                                                            ),
+                                                                        ),
+                                                                    ),
+                                                                ),
+                                                            ),
                                                         ),
                                                     ),
                                                 ),
@@ -633,6 +714,10 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/accounts/{id}/harvest?q=...   (TLH agent)",
     "POST /api/thesis                       (ecosystem agent)",
     "GET  /api/accounts/{id}/review?q=...    (advisor agent)",
+    "GET  /api/servicing/topics",
+    "GET  /api/servicing/jobs",
+    "GET  /api/communities/models?q=...",
+    "POST /api/communities/compare",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -845,6 +930,19 @@ mod tests {
         assert!(
             p["pre_active_share"].as_f64().unwrap() >= p["post_active_share"].as_f64().unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn servicing_and_communities_endpoints() {
+        let c = client().await;
+        let topics: Vec<String> = c.get("/api/servicing/topics").await.json();
+        assert!(topics.iter().any(|t| t == "Address Change"));
+        let jobs: Vec<serde_json::Value> = c.get("/api/servicing/jobs").await.json();
+        assert!(jobs.iter().any(|j| j["name"] == "TLH scan"));
+        let models: Vec<serde_json::Value> = c.get("/api/communities/models?q=esg").await.json();
+        assert_eq!(models.len(), 1);
+        let all: Vec<serde_json::Value> = c.get("/api/communities/models?q=").await.json();
+        assert_eq!(all.len(), 3);
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.
