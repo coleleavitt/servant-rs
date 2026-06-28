@@ -43,6 +43,7 @@ use crate::domain::{
 use crate::mcp;
 use crate::paper::{PaperError, RiskLimits};
 use crate::proposal::Proposal;
+use crate::prospect::{ModelFit, ProspectProfile, rank_models};
 use crate::roles::{Role, capabilities};
 use crate::servicing::{ScheduledJob, TOPICS, default_jobs};
 use crate::thesis::{Signal as ThesisSignal, Thesis, Zone, synthesize};
@@ -427,6 +428,14 @@ macro_rules! ponoma_api {
                     )
                 )
             ),
+            // POST /api/prospect  (AI copilot prospecting)
+            path(
+                "api",
+                path(
+                    "prospect",
+                    req_body::<(Json,), ProspectProfile, _>(post::<(Json,), Vec<ModelFit>>())
+                )
+            ),
         ]
     };
 }
@@ -754,6 +763,10 @@ pub fn router(db: Db) -> RouterService {
         )
     };
 
+    let h_prospect = move |profile: ProspectProfile| async move {
+        Ok::<_, ServerError>(rank_models(&profile, &crate::communities::seed_models()))
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree (order = route declaration order).
     let handlers = (
         h_households,
@@ -795,7 +808,7 @@ pub fn router(db: Db) -> RouterService {
                                                                                 h_jobs,
                                                                                 (
                                                                                     h_comm_models,
-                                                                                    (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, h_caps)))),
+                                                                                    (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, h_prospect))))),
                                                                                 ),
                                                                             ),
                                                                         ),
@@ -845,6 +858,7 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/accounts/{id}/notes",
     "POST /api/accounts/{id}/notes",
     "GET  /api/roles/{role}/capabilities",
+    "POST /api/prospect",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -1136,6 +1150,20 @@ mod tests {
                 .iter()
                 .any(|x| x["capability"] == "ManageBilling" && x["allowed"] == true)
         );
+    }
+
+    #[tokio::test]
+    async fn prospect_endpoint() {
+        let c = client().await;
+        let r = c
+            .request(http::Method::POST, "/api/prospect")
+            .json(&serde_json::json!({"investable": 100000.0, "risk": 2}))
+            .send()
+            .await;
+        assert_eq!(r.status(), 200);
+        let fits: Vec<serde_json::Value> = r.json();
+        assert!(!fits.is_empty());
+        assert_eq!(fits[0]["eligible"], true); // best fit is eligible
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.

@@ -199,6 +199,15 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
             let p = db.proposal(&aid, &name, &model, &quotes_from(args)).await?;
             Ok(serde_json::to_value(p).unwrap_or(json!(null)))
         }
+        "prospect-fit" => {
+            let profile = crate::prospect::ProspectProfile {
+                investable: arg_f64("investable").unwrap_or(0.0),
+                risk: args.get("risk").and_then(|v| v.as_u64()).unwrap_or(3) as u8,
+                category_pref: arg_str("category_pref"),
+            };
+            let ranked = crate::prospect::rank_models(&profile, &crate::communities::seed_models());
+            Ok(serde_json::to_value(ranked).unwrap_or(json!([])))
+        }
         "marketplace-models" => {
             let q = arg_str("query").unwrap_or_default();
             let models = crate::communities::seed_models();

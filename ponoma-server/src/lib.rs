@@ -19,6 +19,7 @@ pub mod http;
 pub mod mcp;
 pub mod paper;
 pub mod proposal;
+pub mod prospect;
 pub mod roles;
 pub mod seed;
 pub mod servicing;
