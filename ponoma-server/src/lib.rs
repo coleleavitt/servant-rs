@@ -17,6 +17,7 @@ pub mod domain;
 pub mod http;
 pub mod mcp;
 pub mod paper;
+pub mod roles;
 pub mod seed;
 
 pub use db::{Db, DbError};
