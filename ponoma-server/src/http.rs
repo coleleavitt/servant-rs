@@ -43,6 +43,7 @@ use crate::domain::{
 use crate::mcp;
 use crate::paper::{PaperError, RiskLimits};
 use crate::proposal::Proposal;
+use crate::roles::{Role, capabilities};
 use crate::servicing::{ScheduledJob, TOPICS, default_jobs};
 use crate::thesis::{Signal as ThesisSignal, Thesis, Zone, synthesize};
 
@@ -131,6 +132,11 @@ pub struct ThesisReq {
 #[derive(Serialize)]
 pub struct CreatedDto {
     pub id: String,
+}
+#[derive(Serialize)]
+pub struct CapabilityDto {
+    pub capability: String,
+    pub allowed: bool,
 }
 #[derive(Serialize)]
 pub struct NoteDto {
@@ -407,6 +413,17 @@ macro_rules! ponoma_api {
                             "notes",
                             req_body::<(Json,), NewNoteReq, _>(post::<(Json,), CreatedDto>())
                         )
+                    )
+                )
+            ),
+            // GET /api/roles/{role}/capabilities
+            path(
+                "api",
+                path(
+                    "roles",
+                    capture::<String, _>(
+                        "role",
+                        path("capabilities", get::<(Json,), Vec<CapabilityDto>>())
                     )
                 )
             ),
@@ -725,6 +742,18 @@ pub fn router(db: Db) -> RouterService {
         }
     };
 
+    let h_caps = move |role: String| async move {
+        let caps = capabilities(Role::from_str_name(&role));
+        Ok::<_, ServerError>(
+            caps.into_iter()
+                .map(|(capability, allowed)| CapabilityDto {
+                    capability: capability.to_string(),
+                    allowed,
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree (order = route declaration order).
     let handlers = (
         h_households,
@@ -766,7 +795,7 @@ pub fn router(db: Db) -> RouterService {
                                                                                 h_jobs,
                                                                                 (
                                                                                     h_comm_models,
-                                                                                    (h_comm_compare, (h_audit, (h_notes_get, h_notes_add))),
+                                                                                    (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, h_caps)))),
                                                                                 ),
                                                                             ),
                                                                         ),
@@ -815,6 +844,7 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/audit",
     "GET  /api/accounts/{id}/notes",
     "POST /api/accounts/{id}/notes",
+    "GET  /api/roles/{role}/capabilities",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -1089,6 +1119,23 @@ mod tests {
             c.get(&format!("/api/accounts/{aid}/notes")).await.json();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0]["body"], "client wants more bonds next quarter");
+    }
+
+    #[tokio::test]
+    async fn role_capabilities_endpoint() {
+        let c = client().await;
+        let caps: Vec<serde_json::Value> = c.get("/api/roles/User/capabilities").await.json();
+        assert_eq!(caps.len(), 7);
+        assert!(
+            caps.iter()
+                .any(|x| x["capability"] == "ManageBilling" && x["allowed"] == false)
+        );
+        let admin: Vec<serde_json::Value> = c.get("/api/roles/FirmAdmin/capabilities").await.json();
+        assert!(
+            admin
+                .iter()
+                .any(|x| x["capability"] == "ManageBilling" && x["allowed"] == true)
+        );
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.

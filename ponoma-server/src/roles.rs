@@ -64,11 +64,66 @@ pub fn can(role: Role, capability: Capability) -> bool {
     }
 }
 
+impl Capability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Capability::ViewBook => "ViewBook",
+            Capability::PaperTrade => "PaperTrade",
+            Capability::EditModels => "EditModels",
+            Capability::ManageHouseholds => "ManageHouseholds",
+            Capability::ManageBilling => "ManageBilling",
+            Capability::AdminConfig => "AdminConfig",
+            Capability::InteractiveLogin => "InteractiveLogin",
+        }
+    }
+}
+
+impl Role {
+    pub fn from_str_name(s: &str) -> Self {
+        match s {
+            "OrionAdmin" => Role::OrionAdmin,
+            "FirmAdmin" => Role::FirmAdmin,
+            "TeamAdmin" => Role::TeamAdmin,
+            "ApiOnly" => Role::ApiOnly,
+            _ => Role::User,
+        }
+    }
+}
+
+const ALL_CAPS: &[Capability] = &[
+    Capability::ViewBook,
+    Capability::PaperTrade,
+    Capability::EditModels,
+    Capability::ManageHouseholds,
+    Capability::ManageBilling,
+    Capability::AdminConfig,
+    Capability::InteractiveLogin,
+];
+
+/// The full capability map for a role — `(capability name, allowed)` for every capability.
+/// The UI consults this to gate admin features.
+pub fn capabilities(role: Role) -> Vec<(&'static str, bool)> {
+    ALL_CAPS
+        .iter()
+        .map(|&c| (c.as_str(), can(role, c)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::Capability::*;
     use super::Role::*;
     use super::*;
+
+    #[test]
+    fn capabilities_map_complete() {
+        let caps = capabilities(FirmAdmin);
+        assert_eq!(caps.len(), 7);
+        assert!(caps.iter().any(|(c, ok)| *c == "ManageBilling" && *ok));
+        assert!(caps.iter().any(|(c, ok)| *c == "AdminConfig" && *ok));
+        let user = capabilities(User);
+        assert!(user.iter().any(|(c, ok)| *c == "ManageBilling" && !*ok));
+    }
 
     #[test]
     fn api_only_cannot_login_but_can_read() {
