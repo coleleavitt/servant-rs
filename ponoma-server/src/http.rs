@@ -133,6 +133,14 @@ pub struct CreatedDto {
     pub id: String,
 }
 #[derive(Serialize)]
+pub struct AuditDto {
+    pub action: String,
+    pub entity: String,
+    pub detail: String,
+    pub at: String,
+    pub household_id: Option<String>,
+}
+#[derive(Serialize)]
 pub struct TransactionDto {
     pub id: String,
     pub kind: String,
@@ -368,6 +376,8 @@ macro_rules! ponoma_api {
                     )
                 )
             ),
+            // GET /api/audit
+            path("api", path("audit", get::<(Json,), Vec<AuditDto>>())),
         ]
     };
 }
@@ -631,6 +641,28 @@ pub fn router(db: Db) -> RouterService {
         Ok::<_, ServerError>(community_compare(&req.a, &req.b))
     };
 
+    let h_audit = {
+        let db = db.clone();
+        move || {
+            let db = db.clone();
+            async move {
+                let events = db.recent_audit(100).await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    events
+                        .into_iter()
+                        .map(|e| AuditDto {
+                            action: e.action,
+                            entity: e.entity,
+                            detail: e.detail,
+                            at: e.at,
+                            household_id: e.household_id,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree (order = route declaration order).
     let handlers = (
         h_households,
@@ -672,7 +704,7 @@ pub fn router(db: Db) -> RouterService {
                                                                                 h_jobs,
                                                                                 (
                                                                                     h_comm_models,
-                                                                                    h_comm_compare,
+                                                                                    (h_comm_compare, h_audit),
                                                                                 ),
                                                                             ),
                                                                         ),
@@ -718,6 +750,7 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/servicing/jobs",
     "GET  /api/communities/models?q=...",
     "POST /api/communities/compare",
+    "GET  /api/audit",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -943,6 +976,23 @@ mod tests {
         assert_eq!(models.len(), 1);
         let all: Vec<serde_json::Value> = c.get("/api/communities/models?q=").await.json();
         assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn audit_endpoint_returns_events() {
+        let c = client().await;
+        // the seed writes a "seeded household" audit event
+        let events: Vec<serde_json::Value> = c.get("/api/audit").await.json();
+        assert!(events.iter().any(|e| e["entity"] == "household"));
+        // a create writes another
+        let _ = c
+            .request(http::Method::POST, "/api/households")
+            .json(&serde_json::json!({"name": "Audit Test"}))
+            .send()
+            .await;
+        let after: Vec<serde_json::Value> = c.get("/api/audit").await.json();
+        assert!(after.len() > events.len());
+        assert_eq!(after[0]["action"], "created"); // newest first
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.

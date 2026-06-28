@@ -355,6 +355,38 @@ impl Db {
         let taxable = !AccountType::from_str_name(&type_str).is_tax_advantaged();
         Ok(build_proposal(model_name, &valued, model, quotes, taxable))
     }
+
+    /// Most-recent audit events (newest first), capped at `limit`.
+    pub async fn recent_audit(&self, limit: i64) -> Result<Vec<AuditEvent>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id, household_id, action, entity, detail, at FROM audit_event \
+             ORDER BY at DESC, id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| AuditEvent {
+                id: r.get("id"),
+                household_id: r.try_get("household_id").ok(),
+                action: r.get("action"),
+                entity: r.get("entity"),
+                detail: r.get("detail"),
+                at: r.get("at"),
+            })
+            .collect())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuditEvent {
+    pub id: String,
+    pub household_id: Option<String>,
+    pub action: String,
+    pub entity: String,
+    pub detail: String,
+    pub at: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
