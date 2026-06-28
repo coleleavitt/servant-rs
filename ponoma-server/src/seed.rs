@@ -40,11 +40,11 @@ pub async fn seed_cole_and_angelina(db: &Db) -> Result<(), DbError> {
             .await?;
     }
 
-    let custodian = id();
-    sqlx::query("INSERT INTO custodian (id, name) VALUES (?, 'Schwab')")
-        .bind(&custodian)
-        .execute(&db.pool)
-        .await?;
+    // Reference custodians (the common RIA custodians). Cole & Angelina custody at Schwab.
+    for name in ["Schwab", "Fidelity", "Pershing", "Altruist"] {
+        db.upsert_custodian(name).await?;
+    }
+    let custodian = db.upsert_custodian("Schwab").await?;
 
     // accounts across registration/account types
     let accounts: &[(&str, AccountType, f64)] = &[

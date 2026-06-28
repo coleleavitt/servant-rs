@@ -50,6 +50,13 @@ pub struct Account {
     pub account_type: String,
     pub cash: f64,
     pub model_id: Option<String>,
+    pub custodian: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Custodian {
+    pub id: String,
+    pub name: String,
 }
 
 impl Db {
@@ -107,8 +114,9 @@ impl Db {
         household_id: &str,
     ) -> Result<Vec<Account>, DbError> {
         let rows = sqlx::query(
-            "SELECT id, household_id, number, account_type, cash, model_id \
-             FROM account WHERE household_id = ? ORDER BY number",
+            "SELECT a.id, a.household_id, a.number, a.account_type, a.cash, a.model_id, c.name AS custodian \
+             FROM account a LEFT JOIN custodian c ON c.id = a.custodian_id \
+             WHERE a.household_id = ? ORDER BY a.number",
         )
         .bind(household_id)
         .fetch_all(&self.pool)
@@ -122,8 +130,41 @@ impl Db {
                 account_type: r.get("account_type"),
                 cash: r.get("cash"),
                 model_id: r.try_get("model_id").ok(),
+                custodian: r.try_get("custodian").ok(),
             })
             .collect())
+    }
+
+    /// All custodians (reference list), alphabetical.
+    pub async fn custodians(&self) -> Result<Vec<Custodian>, DbError> {
+        let rows = sqlx::query("SELECT id, name FROM custodian ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Custodian {
+                id: r.get("id"),
+                name: r.get("name"),
+            })
+            .collect())
+    }
+
+    /// Get-or-create a custodian by name; returns its id. Idempotent on name.
+    pub async fn upsert_custodian(&self, name: &str) -> Result<String, DbError> {
+        if let Some(row) = sqlx::query("SELECT id FROM custodian WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+        {
+            return Ok(row.get("id"));
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO custodian (id, name) VALUES (?, ?)")
+            .bind(&id)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(id)
     }
 
     pub async fn positions_for_account(&self, account_id: &str) -> Result<Vec<Position>, DbError> {
@@ -209,16 +250,19 @@ impl Db {
         number: &str,
         account_type: &str,
         cash: f64,
+        custodian_id: Option<&str>,
     ) -> Result<String, DbError> {
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO account (id, household_id, number, account_type, cash) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO account (id, household_id, number, account_type, cash, custodian_id) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(household_id)
         .bind(number)
         .bind(account_type)
         .bind(cash)
+        .bind(custodian_id)
         .execute(&self.pool)
         .await?;
         self.audit(

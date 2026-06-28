@@ -62,6 +62,12 @@ pub struct AccountDto {
     pub account_type: String,
     pub cash: f64,
     pub model_id: Option<String>,
+    pub custodian: Option<String>,
+}
+#[derive(Serialize)]
+pub struct CustodianDto {
+    pub id: String,
+    pub name: String,
 }
 #[derive(Serialize)]
 pub struct HoldingDto {
@@ -122,6 +128,11 @@ pub struct NewAccountReq {
     pub account_type: String,
     #[serde(default)]
     pub cash: f64,
+    /// Optional custodian — by id (preferred) or by name (get-or-created).
+    #[serde(default)]
+    pub custodian_id: Option<String>,
+    #[serde(default)]
+    pub custodian: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct ThesisReq {
@@ -196,6 +207,11 @@ macro_rules! ponoma_api {
             path(
                 "api",
                 path("households", get::<(Json,), Vec<HouseholdDto>>())
+            ),
+            // GET /api/custodians
+            path(
+                "api",
+                path("custodians", get::<(Json,), Vec<CustodianDto>>())
             ),
             // GET /api/households/{id}/accounts
             path(
@@ -461,6 +477,23 @@ pub fn router(db: Db) -> RouterService {
             }
         }
     };
+    let h_custodians = {
+        let db = db.clone();
+        move || {
+            let db = db.clone();
+            async move {
+                let cs = db.custodians().await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    cs.into_iter()
+                        .map(|c| CustodianDto {
+                            id: c.id,
+                            name: c.name,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
     let h_accounts = {
         let db = db.clone();
         move |id: String| {
@@ -475,6 +508,7 @@ pub fn router(db: Db) -> RouterService {
                             account_type: a.account_type,
                             cash: a.cash,
                             model_id: a.model_id,
+                            custodian: a.custodian,
                         })
                         .collect(),
                 )
@@ -596,8 +630,22 @@ pub fn router(db: Db) -> RouterService {
         move |hid: String, req: NewAccountReq| {
             let db = db.clone();
             async move {
+                // Resolve the custodian: explicit id wins; else get-or-create by name.
+                let custodian_id = match (req.custodian_id, req.custodian) {
+                    (Some(id), _) => Some(id),
+                    (None, Some(name)) if !name.trim().is_empty() => {
+                        Some(db.upsert_custodian(name.trim()).await.map_err(db_err)?)
+                    }
+                    _ => None,
+                };
                 let id = db
-                    .create_account(&hid, &req.number, &req.account_type, req.cash)
+                    .create_account(
+                        &hid,
+                        &req.number,
+                        &req.account_type,
+                        req.cash,
+                        custodian_id.as_deref(),
+                    )
                     .await
                     .map_err(db_err)?;
                 Ok::<_, ServerError>(CreatedDto { id })
@@ -771,9 +819,11 @@ pub fn router(db: Db) -> RouterService {
     let handlers = (
         h_households,
         (
-            h_accounts,
+            h_custodians,
             (
-                h_aum,
+                h_accounts,
+                (
+                    h_aum,
                 (
                     h_holdings,
                     (
@@ -827,6 +877,7 @@ pub fn router(db: Db) -> RouterService {
                     ),
                 ),
             ),
+            ),
         ),
     );
     RouterService::new(serve(ponoma_api!(), handlers))
@@ -835,6 +886,7 @@ pub fn router(db: Db) -> RouterService {
 /// The route list (for the binary's startup log) — the typed API shape, as text.
 pub const ROUTES: &[&str] = &[
     "GET  /api/households",
+    "GET  /api/custodians",
     "GET  /api/households/{id}/accounts",
     "GET  /api/households/{id}/aum?q=AAPL:200,...",
     "GET  /api/accounts/{id}/holdings",
@@ -889,6 +941,53 @@ mod tests {
             .json();
         assert_eq!(accts.len(), 5);
         assert!(accts.iter().any(|a| a["account_type"] == "Roth IRA"));
+    }
+
+    #[tokio::test]
+    async fn custodians_listed_and_account_carries_one() {
+        let c = client().await;
+        let custodians: Vec<serde_json::Value> = c.get("/api/custodians").await.json();
+        // seed registers Schwab/Fidelity/Pershing/Altruist
+        assert!(custodians.iter().any(|x| x["name"] == "Schwab"));
+        assert!(custodians.iter().any(|x| x["name"] == "Fidelity"));
+
+        // seeded accounts custody at Schwab
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        let accts: Vec<serde_json::Value> = c
+            .get(&format!("/api/households/{}/accounts", hs[0].id))
+            .await
+            .json();
+        assert!(accts.iter().all(|a| a["custodian"] == "Schwab"));
+    }
+
+    #[tokio::test]
+    async fn create_account_with_custodian_name_get_or_creates() {
+        let c = client().await;
+        let created: serde_json::Value = c
+            .request(http::Method::POST, "/api/households")
+            .json(&serde_json::json!({"name": "Custody Test"}))
+            .send()
+            .await
+            .json();
+        let hid = created["id"].as_str().unwrap().to_string();
+
+        // create with a brand-new custodian name → it should be created and attached
+        let acc: serde_json::Value = c
+            .request(http::Method::POST, &format!("/api/households/{hid}/accounts"))
+            .json(&serde_json::json!({"number": "INDV-CT-001", "account_type": "Individual", "cash": 0.0, "custodian": "LPL"}))
+            .send()
+            .await
+            .json();
+        assert!(acc["id"].is_string());
+
+        let accts: Vec<serde_json::Value> = c
+            .get(&format!("/api/households/{hid}/accounts"))
+            .await
+            .json();
+        assert_eq!(accts[0]["custodian"], "LPL");
+        // and LPL now shows in the reference list
+        let custodians: Vec<serde_json::Value> = c.get("/api/custodians").await.json();
+        assert!(custodians.iter().any(|x| x["name"] == "LPL"));
     }
 
     #[tokio::test]
