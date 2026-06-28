@@ -133,6 +133,16 @@ pub struct CreatedDto {
     pub id: String,
 }
 #[derive(Serialize)]
+pub struct NoteDto {
+    pub id: String,
+    pub body: String,
+    pub at: String,
+}
+#[derive(Deserialize)]
+pub struct NewNoteReq {
+    pub body: String,
+}
+#[derive(Serialize)]
 pub struct AuditDto {
     pub action: String,
     pub entity: String,
@@ -378,6 +388,28 @@ macro_rules! ponoma_api {
             ),
             // GET /api/audit
             path("api", path("audit", get::<(Json,), Vec<AuditDto>>())),
+            // GET /api/accounts/{id}/notes
+            path(
+                "api",
+                path(
+                    "accounts",
+                    capture::<String, _>("id", path("notes", get::<(Json,), Vec<NoteDto>>()))
+                )
+            ),
+            // POST /api/accounts/{id}/notes
+            path(
+                "api",
+                path(
+                    "accounts",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "notes",
+                            req_body::<(Json,), NewNoteReq, _>(post::<(Json,), CreatedDto>())
+                        )
+                    )
+                )
+            ),
         ]
     };
 }
@@ -663,6 +695,36 @@ pub fn router(db: Db) -> RouterService {
         }
     };
 
+    let h_notes_get = {
+        let db = db.clone();
+        move |aid: String| {
+            let db = db.clone();
+            async move {
+                let notes = db.notes_for_account(&aid).await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    notes
+                        .into_iter()
+                        .map(|n| NoteDto {
+                            id: n.id,
+                            body: n.body,
+                            at: n.at,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+    let h_notes_add = {
+        let db = db.clone();
+        move |aid: String, req: NewNoteReq| {
+            let db = db.clone();
+            async move {
+                let id = db.add_note(&aid, &req.body).await.map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id })
+            }
+        }
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree (order = route declaration order).
     let handlers = (
         h_households,
@@ -704,7 +766,7 @@ pub fn router(db: Db) -> RouterService {
                                                                                 h_jobs,
                                                                                 (
                                                                                     h_comm_models,
-                                                                                    (h_comm_compare, h_audit),
+                                                                                    (h_comm_compare, (h_audit, (h_notes_get, h_notes_add))),
                                                                                 ),
                                                                             ),
                                                                         ),
@@ -751,6 +813,8 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/communities/models?q=...",
     "POST /api/communities/compare",
     "GET  /api/audit",
+    "GET  /api/accounts/{id}/notes",
+    "POST /api/accounts/{id}/notes",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -998,6 +1062,33 @@ mod tests {
                 .iter()
                 .any(|e| e["action"] == "created" && e["detail"] == "Audit Test")
         );
+    }
+
+    #[tokio::test]
+    async fn account_notes_roundtrip() {
+        let c = client().await;
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        let accts: Vec<serde_json::Value> = c
+            .get(&format!("/api/households/{}/accounts", hs[0].id))
+            .await
+            .json();
+        let aid = accts[0]["id"].as_str().unwrap().to_string();
+
+        let empty: Vec<serde_json::Value> =
+            c.get(&format!("/api/accounts/{aid}/notes")).await.json();
+        assert_eq!(empty.len(), 0);
+
+        let r = c
+            .request(http::Method::POST, &format!("/api/accounts/{aid}/notes"))
+            .json(&serde_json::json!({"body": "client wants more bonds next quarter"}))
+            .send()
+            .await;
+        assert_eq!(r.status(), 200);
+
+        let notes: Vec<serde_json::Value> =
+            c.get(&format!("/api/accounts/{aid}/notes")).await.json();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0]["body"], "client wants more bonds next quarter");
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.

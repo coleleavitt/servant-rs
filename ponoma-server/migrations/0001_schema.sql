@@ -126,7 +126,15 @@ CREATE TABLE IF NOT EXISTS audit_event (
   at           TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS account_note (
+  id         TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  body       TEXT NOT NULL,
+  at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_account_household ON account(household_id);
 CREATE INDEX IF NOT EXISTS idx_holding_account ON holding(account_id);
 CREATE INDEX IF NOT EXISTS idx_txn_account ON transaction_ledger(account_id);
 CREATE INDEX IF NOT EXISTS idx_order_account ON paper_order(account_id);
+CREATE INDEX IF NOT EXISTS idx_note_account ON account_note(account_id);

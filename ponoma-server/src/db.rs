@@ -377,6 +377,43 @@ impl Db {
             })
             .collect())
     }
+
+    /// Add a free-text note to an account; returns the new note id.
+    pub async fn add_note(&self, account_id: &str, body: &str) -> Result<String, DbError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO account_note (id, account_id, body) VALUES (?, ?, ?)")
+            .bind(&id)
+            .bind(account_id)
+            .bind(body)
+            .execute(&self.pool)
+            .await?;
+        Ok(id)
+    }
+
+    /// Notes for an account, newest first.
+    pub async fn notes_for_account(&self, account_id: &str) -> Result<Vec<Note>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id, body, at FROM account_note WHERE account_id = ? ORDER BY at DESC, id DESC",
+        )
+        .bind(account_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Note {
+                id: r.get("id"),
+                body: r.get("body"),
+                at: r.get("at"),
+            })
+            .collect())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub id: String,
+    pub body: String,
+    pub at: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
