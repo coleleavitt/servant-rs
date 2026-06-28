@@ -138,3 +138,59 @@ CREATE INDEX IF NOT EXISTS idx_holding_account ON holding(account_id);
 CREATE INDEX IF NOT EXISTS idx_txn_account ON transaction_ledger(account_id);
 CREATE INDEX IF NOT EXISTS idx_order_account ON paper_order(account_id);
 CREATE INDEX IF NOT EXISTS idx_note_account ON account_note(account_id);
+
+-- ── Phase 9: the agentic operating model (CONCEPT.md) ───────────────────────
+-- A STRATEGY is a first-class trading system: a versioned policy (triggers + rules) that
+-- references models/security-sets and is assignable to a managed allocation (CONCEPT.md §4).
+CREATE TABLE IF NOT EXISTS strategy (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'rotation',  -- rotation, distress-avoid, follow-disclosures, tactical-derisk
+  description TEXT NOT NULL DEFAULT '',
+  model_id    TEXT REFERENCES model(id) ON DELETE SET NULL,
+  -- rules/triggers as JSON (e.g. {"sellWhenZBelow":1.8,"maxNames":12})
+  rules       TEXT NOT NULL DEFAULT '{}',
+  version     INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- A MANAGED ALLOCATION is a slice of cash an agent runs as a local paper portfolio, with a
+-- mandate + a HARD per-allocation risk envelope (CONCEPT.md §1). Its own holdings live in the
+-- holding/transaction tables keyed by a dedicated paper account_id, so the existing paper engine
+-- + deterministic risk gate apply unchanged.
+CREATE TABLE IF NOT EXISTS managed_allocation (
+  id              TEXT PRIMARY KEY,
+  household_id    TEXT NOT NULL REFERENCES household(id) ON DELETE CASCADE,
+  source_account_id TEXT REFERENCES account(id) ON DELETE SET NULL, -- where the cash came from (on paper)
+  paper_account_id  TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE, -- the allocation's own book
+  strategy_id     TEXT REFERENCES strategy(id) ON DELETE SET NULL,
+  name            TEXT NOT NULL,
+  mandate         TEXT NOT NULL DEFAULT '',          -- free-text objective/constraints
+  risk_level      INTEGER NOT NULL DEFAULT 3,        -- 1..5
+  funded          REAL NOT NULL DEFAULT 0,           -- cash originally allocated
+  -- the hard envelope (mirrors paper::RiskLimits): the agent cannot widen these.
+  max_order_frac  REAL NOT NULL DEFAULT 0.25,
+  max_cash_use_frac REAL NOT NULL DEFAULT 1.0,
+  allow_short     INTEGER NOT NULL DEFAULT 0,
+  active          INTEGER NOT NULL DEFAULT 1,        -- kill switch: 0 halts all autonomous activity
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- The DECISION LOG: every agent action records the thesis + confidence that justified it, plus
+-- the gate verdict (CONCEPT.md §8 audit rail). Append-only.
+CREATE TABLE IF NOT EXISTS agent_decision (
+  id            TEXT PRIMARY KEY,
+  allocation_id TEXT NOT NULL REFERENCES managed_allocation(id) ON DELETE CASCADE,
+  step          TEXT NOT NULL,            -- watch, understand, decide, gate, act
+  ticker        TEXT NOT NULL DEFAULT '',
+  action        TEXT NOT NULL DEFAULT '', -- BUY/SELL/HOLD
+  shares        REAL NOT NULL DEFAULT 0,
+  thesis        TEXT NOT NULL DEFAULT '',
+  confidence    REAL NOT NULL DEFAULT 0,
+  admitted      INTEGER NOT NULL DEFAULT 0,  -- gate verdict
+  verdict       TEXT NOT NULL DEFAULT '',    -- gate rationale
+  at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alloc_household ON managed_allocation(household_id);
+CREATE INDEX IF NOT EXISTS idx_decision_alloc ON agent_decision(allocation_id);

@@ -1,0 +1,455 @@
+//! The agentic operating model (Phase 9 / CONCEPT.md): managed allocations, strategies, the
+//! decision log, and the autonomous loop tick.
+//!
+//! A **managed allocation** is a slice of cash an agent runs as a local paper portfolio. It owns
+//! a dedicated paper `account` (so the existing [`crate::paper`] engine + deterministic risk gate
+//! apply unchanged), a mandate, and a HARD per-allocation risk envelope the agent cannot widen.
+//!
+//! A **strategy** is a first-class trading system (a versioned policy) assignable to an allocation.
+//!
+//! The **loop tick** is one deterministic `watch → understand → decide → gate → act` iteration:
+//! a thesis (from the distress zone) becomes a proposal, the deterministic gate admits/rejects it,
+//! and on admission a paper fill posts to the allocation's book. Every step is logged. The
+//! per-allocation `active` flag is the kill switch — a halted allocation never trades.
+
+use sqlx::Row;
+use uuid::Uuid;
+
+use crate::db::{Db, DbError};
+use crate::domain::{Quotes, TradeAction};
+use crate::paper::{PaperError, RiskLimits};
+use crate::thesis::{self, Verdict, Zone};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Strategy {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub description: String,
+    pub model_id: Option<String>,
+    pub rules: String,
+    pub version: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ManagedAllocation {
+    pub id: String,
+    pub household_id: String,
+    pub paper_account_id: String,
+    pub source_account_id: Option<String>,
+    pub strategy_id: Option<String>,
+    pub name: String,
+    pub mandate: String,
+    pub risk_level: i64,
+    pub funded: f64,
+    pub max_order_frac: f64,
+    pub max_cash_use_frac: f64,
+    pub allow_short: bool,
+    pub active: bool,
+}
+
+impl ManagedAllocation {
+    /// The hard risk envelope for this allocation (mirrors [`RiskLimits`]). The agent loop runs
+    /// every proposal through this — it can never widen it.
+    pub fn limits(&self) -> RiskLimits {
+        RiskLimits {
+            max_order_frac: self.max_order_frac,
+            allow_short: self.allow_short,
+            max_cash_use_frac: self.max_cash_use_frac,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentDecision {
+    pub id: String,
+    pub step: String,
+    pub ticker: String,
+    pub action: String,
+    pub shares: f64,
+    pub thesis: String,
+    pub confidence: f64,
+    pub admitted: bool,
+    pub verdict: String,
+    pub at: String,
+}
+
+/// Outcome of one loop tick for one candidate ticker.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TickResult {
+    pub ticker: String,
+    pub action: String,
+    pub admitted: bool,
+    pub filled: bool,
+    pub thesis: String,
+    pub verdict: String,
+}
+
+impl Db {
+    // ── strategies ───────────────────────────────────────────────────────────
+    pub async fn create_strategy(
+        &self,
+        name: &str,
+        kind: &str,
+        description: &str,
+        model_id: Option<&str>,
+        rules: &str,
+    ) -> Result<String, DbError> {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO strategy (id, name, kind, description, model_id, rules) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id).bind(name).bind(kind).bind(description).bind(model_id).bind(rules)
+        .execute(&self.pool).await?;
+        self.audit(None, "created", "strategy", name).await?;
+        Ok(id)
+    }
+
+    pub async fn strategies(&self) -> Result<Vec<Strategy>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id, name, kind, description, model_id, rules, version FROM strategy ORDER BY created_at DESC, name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Strategy {
+                id: r.get("id"),
+                name: r.get("name"),
+                kind: r.get("kind"),
+                description: r.get("description"),
+                model_id: r.try_get("model_id").ok(),
+                rules: r.get("rules"),
+                version: r.get("version"),
+            })
+            .collect())
+    }
+
+    // ── managed allocations ──────────────────────────────────────────────────
+    /// Fund a new managed allocation: create its dedicated paper account (seeded with `funded`
+    /// cash, drawn on paper from `source_account_id` if given) and the allocation record.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_allocation(
+        &self,
+        household_id: &str,
+        name: &str,
+        mandate: &str,
+        risk_level: i64,
+        funded: f64,
+        source_account_id: Option<&str>,
+        strategy_id: Option<&str>,
+    ) -> Result<String, DbError> {
+        // dedicated paper book for this allocation
+        let paper_account_id = self
+            .create_account(household_id, &format!("ALLOC-{name}"), "Managed Allocation", funded, None)
+            .await?;
+
+        // draw the cash from the source account on paper (so the book balances), best-effort.
+        if let Some(src) = source_account_id {
+            sqlx::query("UPDATE account SET cash = cash - ? WHERE id = ?")
+                .bind(funded)
+                .bind(src)
+                .execute(&self.pool)
+                .await?;
+        }
+
+        let id = Uuid::new_v4().to_string();
+        let lim = RiskLimits::default();
+        sqlx::query(
+            "INSERT INTO managed_allocation \
+             (id, household_id, source_account_id, paper_account_id, strategy_id, name, mandate, \
+              risk_level, funded, max_order_frac, max_cash_use_frac, allow_short, active) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)",
+        )
+        .bind(&id)
+        .bind(household_id)
+        .bind(source_account_id)
+        .bind(&paper_account_id)
+        .bind(strategy_id)
+        .bind(name)
+        .bind(mandate)
+        .bind(risk_level)
+        .bind(funded)
+        .bind(lim.max_order_frac)
+        .bind(lim.max_cash_use_frac)
+        .execute(&self.pool)
+        .await?;
+        self.audit(Some(household_id), "created", "allocation", name).await?;
+        Ok(id)
+    }
+
+    pub async fn allocations_for_household(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<ManagedAllocation>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id, household_id, source_account_id, paper_account_id, strategy_id, name, \
+                    mandate, risk_level, funded, max_order_frac, max_cash_use_frac, allow_short, active \
+             FROM managed_allocation WHERE household_id = ? ORDER BY created_at DESC",
+        )
+        .bind(household_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_allocation).collect())
+    }
+
+    pub async fn allocation(&self, id: &str) -> Result<Option<ManagedAllocation>, DbError> {
+        let row = sqlx::query(
+            "SELECT id, household_id, source_account_id, paper_account_id, strategy_id, name, \
+                    mandate, risk_level, funded, max_order_frac, max_cash_use_frac, allow_short, active \
+             FROM managed_allocation WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(row_to_allocation))
+    }
+
+    /// The kill switch: set an allocation active/halted. A halted allocation never trades.
+    pub async fn set_allocation_active(&self, id: &str, active: bool) -> Result<(), DbError> {
+        sqlx::query("UPDATE managed_allocation SET active = ? WHERE id = ?")
+            .bind(active as i64)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.audit(None, if active { "resumed" } else { "halted" }, "allocation", id)
+            .await?;
+        Ok(())
+    }
+
+    // ── decision log ─────────────────────────────────────────────────────────
+    #[allow(clippy::too_many_arguments)]
+    async fn log_decision(
+        &self,
+        allocation_id: &str,
+        step: &str,
+        ticker: &str,
+        action: &str,
+        shares: f64,
+        thesis: &str,
+        confidence: f64,
+        admitted: bool,
+        verdict: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO agent_decision \
+             (id, allocation_id, step, ticker, action, shares, thesis, confidence, admitted, verdict) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(allocation_id)
+        .bind(step)
+        .bind(ticker)
+        .bind(action)
+        .bind(shares)
+        .bind(thesis)
+        .bind(confidence)
+        .bind(admitted as i64)
+        .bind(verdict)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn decisions_for_allocation(
+        &self,
+        allocation_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AgentDecision>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id, step, ticker, action, shares, thesis, confidence, admitted, verdict, at \
+             FROM agent_decision WHERE allocation_id = ? ORDER BY at DESC, id DESC LIMIT ?",
+        )
+        .bind(allocation_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| AgentDecision {
+                id: r.get("id"),
+                step: r.get("step"),
+                ticker: r.get("ticker"),
+                action: r.get("action"),
+                shares: r.get("shares"),
+                thesis: r.get("thesis"),
+                confidence: r.get("confidence"),
+                admitted: r.get::<i64, _>("admitted") != 0,
+                verdict: r.get("verdict"),
+                at: r.get("at"),
+            })
+            .collect())
+    }
+
+    // ── the autonomous loop tick ──────────────────────────────────────────────
+    /// Run ONE deterministic loop iteration over `candidates`: for each ticker, synthesize a
+    /// thesis from its distress `zone`, decide an action, run the deterministic risk gate, and on
+    /// admission post a paper fill to the allocation's book. Every decision is logged. A halted
+    /// allocation (kill switch off) does nothing. `quotes` prices the fills; `zones` supplies the
+    /// distress zone per ticker (from the screener). The LLM never executes — it can only feed
+    /// candidates/zones; this gate is the only path to a fill.
+    pub async fn run_loop_tick(
+        &self,
+        allocation_id: &str,
+        candidates: &[String],
+        zones: &std::collections::HashMap<String, Zone>,
+        quotes: &Quotes,
+    ) -> Result<Vec<TickResult>, PaperError> {
+        let alloc = self
+            .allocation(allocation_id)
+            .await?
+            .ok_or(PaperError::AccountNotFound)?;
+        if !alloc.active {
+            // kill switch engaged — record the no-op and return nothing.
+            self.log_decision(allocation_id, "watch", "", "", 0.0, "allocation halted (kill switch)", 0.0, false, "halted")
+                .await?;
+            return Ok(Vec::new());
+        }
+
+        let limits = alloc.limits();
+        let mut results = Vec::new();
+
+        for ticker in candidates {
+            let t = ticker.to_uppercase();
+            let zone = zones.get(&t).copied().unwrap_or(Zone::Unknown);
+            let thesis = thesis::synthesize(&t, zone, &[]);
+            let rationale = thesis.rationale.join("; ");
+
+            // decide: Opportunity → BUY, Avoid → SELL (trim), else HOLD.
+            let action = match thesis.verdict {
+                Verdict::Opportunity => Some(TradeAction::Buy),
+                Verdict::Avoid => Some(TradeAction::Sell),
+                _ => None,
+            };
+            let Some(action) = action else {
+                self.log_decision(allocation_id, "decide", &t, "HOLD", 0.0, &rationale, thesis.confidence, false, "no actionable edge")
+                    .await?;
+                results.push(TickResult { ticker: t, action: "HOLD".into(), admitted: false, filled: false, thesis: rationale, verdict: "hold".into() });
+                continue;
+            };
+            let act_str = match action {
+                TradeAction::Buy => "BUY",
+                TradeAction::Sell => "SELL",
+            };
+
+            let Some(&price) = quotes.get(&t) else {
+                self.log_decision(allocation_id, "gate", &t, act_str, 0.0, &rationale, thesis.confidence, false, "no quote")
+                    .await?;
+                results.push(TickResult { ticker: t, action: act_str.into(), admitted: false, filled: false, thesis: rationale, verdict: "no quote".into() });
+                continue;
+            };
+
+            // size: a single envelope-bounded clip — max_order_frac of the book value.
+            let val = self.value_account(&alloc.paper_account_id, quotes).await?;
+            let budget = limits.max_order_frac * val.total_value;
+            let shares = (budget / price).floor().max(0.0);
+            if shares <= 0.0 {
+                self.log_decision(allocation_id, "gate", &t, act_str, 0.0, &rationale, thesis.confidence, false, "size below one share")
+                    .await?;
+                results.push(TickResult { ticker: t, action: act_str.into(), admitted: false, filled: false, thesis: rationale, verdict: "too small".into() });
+                continue;
+            }
+
+            // gate + act: the existing deterministic paper engine enforces the envelope.
+            match self.paper_execute(&alloc.paper_account_id, action, &t, shares, price, &limits).await {
+                Ok(_) => {
+                    self.log_decision(allocation_id, "act", &t, act_str, shares, &rationale, thesis.confidence, true, "filled (paper)")
+                        .await?;
+                    results.push(TickResult { ticker: t, action: act_str.into(), admitted: true, filled: true, thesis: rationale, verdict: "filled".into() });
+                }
+                Err(PaperError::RiskRejected(why)) => {
+                    self.log_decision(allocation_id, "gate", &t, act_str, shares, &rationale, thesis.confidence, false, &why)
+                        .await?;
+                    results.push(TickResult { ticker: t, action: act_str.into(), admitted: false, filled: false, thesis: rationale, verdict: why });
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(results)
+    }
+}
+
+fn row_to_allocation(r: sqlx::sqlite::SqliteRow) -> ManagedAllocation {
+    ManagedAllocation {
+        id: r.get("id"),
+        household_id: r.get("household_id"),
+        source_account_id: r.try_get("source_account_id").ok(),
+        paper_account_id: r.get("paper_account_id"),
+        strategy_id: r.try_get("strategy_id").ok(),
+        name: r.get("name"),
+        mandate: r.get("mandate"),
+        risk_level: r.get("risk_level"),
+        funded: r.get("funded"),
+        max_order_frac: r.get("max_order_frac"),
+        max_cash_use_frac: r.get("max_cash_use_frac"),
+        allow_short: r.get::<i64, _>("allow_short") != 0,
+        active: r.get::<i64, _>("active") != 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bootstrap;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn allocation_funds_a_paper_book_and_runs_a_gated_loop_tick() {
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        let hh = &db.households().await.unwrap()[0].id;
+
+        let alloc_id = db
+            .create_allocation(hh, "Growth", "growth, no tobacco", 4, 100_000.0, None, None)
+            .await
+            .unwrap();
+        let alloc = db.allocation(&alloc_id).await.unwrap().unwrap();
+        assert_eq!(alloc.funded, 100_000.0);
+        assert!(alloc.active);
+
+        // a BUY candidate in the safe zone → thesis Opportunity → gated paper fill
+        let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
+        let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
+        let results = db
+            .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].filled, "safe-zone opportunity should fill: {:?}", results[0]);
+
+        // a decision was logged and a holding now exists in the allocation's book
+        let decisions = db.decisions_for_allocation(&alloc_id, 10).await.unwrap();
+        assert!(decisions.iter().any(|d| d.admitted && d.ticker == "AAPL"));
+        let valued = db.value_account(&alloc.paper_account_id, &quotes).await.unwrap();
+        assert!(valued.total_value > 0.0);
+    }
+
+    #[tokio::test]
+    async fn kill_switch_halts_all_trading() {
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        let hh = &db.households().await.unwrap()[0].id;
+        let alloc_id = db
+            .create_allocation(hh, "Halted", "test", 3, 50_000.0, None, None)
+            .await
+            .unwrap();
+        db.set_allocation_active(&alloc_id, false).await.unwrap();
+
+        let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
+        let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
+        let results = db
+            .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes)
+            .await
+            .unwrap();
+        assert!(results.is_empty(), "halted allocation must not trade");
+    }
+
+    #[tokio::test]
+    async fn strategy_create_and_list() {
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        let id = db
+            .create_strategy("Distress Avoid", "distress-avoid", "sell on Z<1.8", None, r#"{"sellWhenZBelow":1.8}"#)
+            .await
+            .unwrap();
+        let all = db.strategies().await.unwrap();
+        assert!(all.iter().any(|s| s.id == id && s.name == "Distress Avoid"));
+    }
+}

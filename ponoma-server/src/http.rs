@@ -145,6 +145,99 @@ pub struct ThesisReq {
 pub struct CreatedDto {
     pub id: String,
 }
+
+// ── Phase 9: managed allocations, strategies, the agent loop ────────────────
+#[derive(Serialize)]
+pub struct AllocationDto {
+    pub id: String,
+    pub name: String,
+    pub mandate: String,
+    pub risk_level: i64,
+    pub funded: f64,
+    pub paper_account_id: String,
+    pub strategy_id: Option<String>,
+    pub active: bool,
+}
+#[derive(Deserialize)]
+pub struct NewAllocationReq {
+    pub name: String,
+    #[serde(default)]
+    pub mandate: String,
+    #[serde(default = "default_risk")]
+    pub risk_level: i64,
+    pub funded: f64,
+    #[serde(default)]
+    pub source_account_id: Option<String>,
+    #[serde(default)]
+    pub strategy_id: Option<String>,
+}
+fn default_risk() -> i64 {
+    3
+}
+#[derive(Serialize)]
+pub struct StrategyDto {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub description: String,
+    pub model_id: Option<String>,
+    pub rules: String,
+    pub version: i64,
+}
+#[derive(Deserialize)]
+pub struct NewStrategyReq {
+    pub name: String,
+    #[serde(default = "default_strategy_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default = "default_rules")]
+    pub rules: String,
+}
+fn default_strategy_kind() -> String {
+    "rotation".into()
+}
+fn default_rules() -> String {
+    "{}".into()
+}
+#[derive(Serialize)]
+pub struct DecisionDto {
+    pub step: String,
+    pub ticker: String,
+    pub action: String,
+    pub shares: f64,
+    pub thesis: String,
+    pub confidence: f64,
+    pub admitted: bool,
+    pub verdict: String,
+    pub at: String,
+}
+#[derive(Deserialize)]
+pub struct LoopTickReq {
+    /// candidate tickers to evaluate this tick
+    pub candidates: Vec<String>,
+    /// distress zone per ticker ("safe"/"grey"/"distress"/"unknown")
+    #[serde(default)]
+    pub zones: std::collections::HashMap<String, String>,
+    /// live quotes "AAPL:200,MSFT:400"
+    #[serde(default)]
+    pub quotes: String,
+}
+#[derive(Serialize)]
+pub struct TickResultDto {
+    pub ticker: String,
+    pub action: String,
+    pub admitted: bool,
+    pub filled: bool,
+    pub thesis: String,
+    pub verdict: String,
+}
+#[derive(Deserialize)]
+pub struct SetActiveReq {
+    pub active: bool,
+}
 #[derive(Serialize)]
 pub struct CapabilityDto {
     pub capability: String,
@@ -450,6 +543,74 @@ macro_rules! ponoma_api {
                 path(
                     "prospect",
                     req_body::<(Json,), ProspectProfile, _>(post::<(Json,), Vec<ModelFit>>())
+                )
+            ),
+            // GET /api/strategies
+            path("api", path("strategies", get::<(Json,), Vec<StrategyDto>>())),
+            // POST /api/strategies  (create)
+            path(
+                "api",
+                path(
+                    "strategies",
+                    req_body::<(Json,), NewStrategyReq, _>(post::<(Json,), CreatedDto>())
+                )
+            ),
+            // GET /api/households/{id}/allocations
+            path(
+                "api",
+                path(
+                    "households",
+                    capture::<String, _>("id", path("allocations", get::<(Json,), Vec<AllocationDto>>()))
+                )
+            ),
+            // POST /api/households/{id}/allocations  (create / fund)
+            path(
+                "api",
+                path(
+                    "households",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "allocations",
+                            req_body::<(Json,), NewAllocationReq, _>(post::<(Json,), CreatedDto>())
+                        )
+                    )
+                )
+            ),
+            // GET /api/allocations/{id}/decisions
+            path(
+                "api",
+                path(
+                    "allocations",
+                    capture::<String, _>("id", path("decisions", get::<(Json,), Vec<DecisionDto>>()))
+                )
+            ),
+            // POST /api/allocations/{id}/tick  (run one agent loop iteration)
+            path(
+                "api",
+                path(
+                    "allocations",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "tick",
+                            req_body::<(Json,), LoopTickReq, _>(post::<(Json,), Vec<TickResultDto>>())
+                        )
+                    )
+                )
+            ),
+            // POST /api/allocations/{id}/active  (kill switch)
+            path(
+                "api",
+                path(
+                    "allocations",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "active",
+                            req_body::<(Json,), SetActiveReq, _>(post::<(Json,), CreatedDto>())
+                        )
+                    )
                 )
             ),
         ]
@@ -815,6 +976,160 @@ pub fn router(db: Db) -> RouterService {
         Ok::<_, ServerError>(rank_models(&profile, &crate::communities::seed_models()))
     };
 
+    // ── Phase 9 handlers: managed allocations, strategies, the agent loop ────
+    let h_strategies = {
+        let db = db.clone();
+        move || {
+            let db = db.clone();
+            async move {
+                let ss = db.strategies().await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    ss.into_iter()
+                        .map(|s| StrategyDto {
+                            id: s.id,
+                            name: s.name,
+                            kind: s.kind,
+                            description: s.description,
+                            model_id: s.model_id,
+                            rules: s.rules,
+                            version: s.version,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+    let h_create_strategy = {
+        let db = db.clone();
+        move |req: NewStrategyReq| {
+            let db = db.clone();
+            async move {
+                let id = db
+                    .create_strategy(&req.name, &req.kind, &req.description, req.model_id.as_deref(), &req.rules)
+                    .await
+                    .map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id })
+            }
+        }
+    };
+    let h_allocations = {
+        let db = db.clone();
+        move |hid: String| {
+            let db = db.clone();
+            async move {
+                let al = db.allocations_for_household(&hid).await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    al.into_iter()
+                        .map(|a| AllocationDto {
+                            id: a.id,
+                            name: a.name,
+                            mandate: a.mandate,
+                            risk_level: a.risk_level,
+                            funded: a.funded,
+                            paper_account_id: a.paper_account_id,
+                            strategy_id: a.strategy_id,
+                            active: a.active,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+    let h_create_allocation = {
+        let db = db.clone();
+        move |hid: String, req: NewAllocationReq| {
+            let db = db.clone();
+            async move {
+                let id = db
+                    .create_allocation(
+                        &hid,
+                        &req.name,
+                        &req.mandate,
+                        req.risk_level,
+                        req.funded,
+                        req.source_account_id.as_deref(),
+                        req.strategy_id.as_deref(),
+                    )
+                    .await
+                    .map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id })
+            }
+        }
+    };
+    let h_decisions = {
+        let db = db.clone();
+        move |aid: String| {
+            let db = db.clone();
+            async move {
+                let ds = db.decisions_for_allocation(&aid, 100).await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    ds.into_iter()
+                        .map(|d| DecisionDto {
+                            step: d.step,
+                            ticker: d.ticker,
+                            action: d.action,
+                            shares: d.shares,
+                            thesis: d.thesis,
+                            confidence: d.confidence,
+                            admitted: d.admitted,
+                            verdict: d.verdict,
+                            at: d.at,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+    let h_loop_tick = {
+        let db = db.clone();
+        move |aid: String, req: LoopTickReq| {
+            let db = db.clone();
+            async move {
+                let zones: std::collections::HashMap<String, Zone> = req
+                    .zones
+                    .into_iter()
+                    .map(|(t, z)| {
+                        let zone = match z.to_ascii_lowercase().as_str() {
+                            "safe" => Zone::Safe,
+                            "grey" | "gray" => Zone::Grey,
+                            "distress" => Zone::Distress,
+                            _ => Zone::Unknown,
+                        };
+                        (t.to_uppercase(), zone)
+                    })
+                    .collect();
+                let quotes = parse_quotes(Some(req.quotes));
+                let results = db
+                    .run_loop_tick(&aid, &req.candidates, &zones, &quotes)
+                    .await
+                    .map_err(|e| ServerError::err422().with_reason(e.to_string()))?;
+                Ok::<_, ServerError>(
+                    results
+                        .into_iter()
+                        .map(|r| TickResultDto {
+                            ticker: r.ticker,
+                            action: r.action,
+                            admitted: r.admitted,
+                            filled: r.filled,
+                            thesis: r.thesis,
+                            verdict: r.verdict,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+    let h_set_active = {
+        let db = db.clone();
+        move |aid: String, req: SetActiveReq| {
+            let db = db.clone();
+            async move {
+                db.set_allocation_active(&aid, req.active).await.map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id: aid })
+            }
+        }
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree (order = route declaration order).
     let handlers = (
         h_households,
@@ -858,7 +1173,7 @@ pub fn router(db: Db) -> RouterService {
                                                                                 h_jobs,
                                                                                 (
                                                                                     h_comm_models,
-                                                                                    (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, h_prospect))))),
+                                                                                    (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_allocations, (h_create_allocation, (h_decisions, (h_loop_tick, h_set_active)))))))))))),
                                                                                 ),
                                                                             ),
                                                                         ),
@@ -911,6 +1226,13 @@ pub const ROUTES: &[&str] = &[
     "POST /api/accounts/{id}/notes",
     "GET  /api/roles/{role}/capabilities",
     "POST /api/prospect",
+    "GET  /api/strategies",
+    "POST /api/strategies                   (create)",
+    "GET  /api/households/{id}/allocations",
+    "POST /api/households/{id}/allocations  (fund a managed allocation)",
+    "GET  /api/allocations/{id}/decisions",
+    "POST /api/allocations/{id}/tick        (run one agent loop iteration)",
+    "POST /api/allocations/{id}/active      (kill switch)",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -941,6 +1263,71 @@ mod tests {
             .json();
         assert_eq!(accts.len(), 5);
         assert!(accts.iter().any(|a| a["account_type"] == "Roth IRA"));
+    }
+
+    #[tokio::test]
+    async fn allocation_lifecycle_fund_tick_decisions_killswitch() {
+        let c = client().await;
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        let hid = &hs[0].id;
+
+        // fund a managed allocation
+        let created: serde_json::Value = c
+            .request(http::Method::POST, &format!("/api/households/{hid}/allocations"))
+            .json(&serde_json::json!({"name": "Growth", "mandate": "growth", "risk_level": 4, "funded": 100000.0}))
+            .send()
+            .await
+            .json();
+        let aid = created["id"].as_str().unwrap().to_string();
+
+        let allocs: Vec<serde_json::Value> = c
+            .get(&format!("/api/households/{hid}/allocations"))
+            .await
+            .json();
+        assert!(allocs.iter().any(|a| a["id"] == aid && a["funded"] == 100000.0 && a["active"] == true));
+
+        // run one loop tick: a safe-zone candidate should fill
+        let results: Vec<serde_json::Value> = c
+            .request(http::Method::POST, &format!("/api/allocations/{aid}/tick"))
+            .json(&serde_json::json!({"candidates": ["AAPL"], "zones": {"AAPL": "safe"}, "quotes": "AAPL:200"}))
+            .send()
+            .await
+            .json();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["filled"], true);
+
+        // a decision was logged
+        let decisions: Vec<serde_json::Value> = c.get(&format!("/api/allocations/{aid}/decisions")).await.json();
+        assert!(decisions.iter().any(|d| d["admitted"] == true && d["ticker"] == "AAPL"));
+
+        // kill switch halts trading
+        let _: serde_json::Value = c
+            .request(http::Method::POST, &format!("/api/allocations/{aid}/active"))
+            .json(&serde_json::json!({"active": false}))
+            .send()
+            .await
+            .json();
+        let halted: Vec<serde_json::Value> = c
+            .request(http::Method::POST, &format!("/api/allocations/{aid}/tick"))
+            .json(&serde_json::json!({"candidates": ["MSFT"], "zones": {"MSFT": "safe"}, "quotes": "MSFT:400"}))
+            .send()
+            .await
+            .json();
+        assert!(halted.is_empty(), "halted allocation must not trade");
+    }
+
+    #[tokio::test]
+    async fn strategy_endpoint_create_and_list() {
+        let c = client().await;
+        let created: serde_json::Value = c
+            .request(http::Method::POST, "/api/strategies")
+            .json(&serde_json::json!({"name": "Momentum Rotation", "kind": "rotation", "description": "rotate sector ETFs"}))
+            .send()
+            .await
+            .json();
+        assert!(created["id"].is_string());
+        let strategies: Vec<serde_json::Value> = c.get("/api/strategies").await.json();
+        assert!(strategies.iter().any(|s| s["name"] == "Momentum Rotation"));
     }
 
     #[tokio::test]

@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
+pub mod allocation;
 pub mod billing;
 pub mod communities;
 pub mod db;
