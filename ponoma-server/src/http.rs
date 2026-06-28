@@ -21,6 +21,7 @@ use servant::alt_all;
 use servant::prelude::*;
 use servant_server::{RouterService, serve};
 
+use crate::agent::HarvestPlan;
 use crate::billing::{FeeResult, FeeSchedule, compute_fee};
 use crate::db::Db;
 use crate::domain::{
@@ -259,6 +260,20 @@ macro_rules! ponoma_api {
                     )
                 )
             ),
+            // GET /api/accounts/{id}/harvest?q=
+            path(
+                "api",
+                path(
+                    "accounts",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "harvest",
+                            query_param::<String, _>("q", get::<(Json,), HarvestPlan>())
+                        )
+                    )
+                )
+            ),
         ]
     };
 }
@@ -462,6 +477,18 @@ pub fn router(db: Db) -> RouterService {
         }
     };
 
+    let h_harvest = {
+        let db = db.clone();
+        move |aid: String, q: Option<String>| {
+            let db = db.clone();
+            async move {
+                db.harvest_plan(&aid, &parse_quotes(q), -5.0)
+                    .await
+                    .map_err(db_err)
+            }
+        }
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree.
     let handlers = (
         h_households,
@@ -483,7 +510,10 @@ pub fn router(db: Db) -> RouterService {
                                         h_rebalance,
                                         (
                                             h_create_household,
-                                            (h_create_account, (h_transactions, h_performance)),
+                                            (
+                                                h_create_account,
+                                                (h_transactions, (h_performance, h_harvest)),
+                                            ),
                                         ),
                                     ),
                                 ),
@@ -512,6 +542,7 @@ pub const ROUTES: &[&str] = &[
     "POST /api/households/{id}/accounts (create)",
     "GET  /api/accounts/{id}/transactions",
     "GET  /api/accounts/{id}/performance?q=...",
+    "GET  /api/accounts/{id}/harvest?q=...   (TLH agent)",
 ];
 
 // Re-export Arc so the binary can share the service if needed.

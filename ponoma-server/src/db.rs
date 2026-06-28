@@ -4,7 +4,9 @@
 use sqlx::Row;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
+use crate::agent::{HarvestPlan, propose_harvest};
 use crate::domain::{
+    AccountType,
     LedgerTxn,
     Performance,
     Position,
@@ -13,6 +15,7 @@ use crate::domain::{
     performance,
     value_positions,
 };
+use crate::paper::RiskLimits;
 
 /// The schema, embedded at compile time. Idempotent (`CREATE TABLE IF NOT EXISTS`), so applying
 /// it on every boot is safe — we run it directly rather than via the `migrate!` macro (which
@@ -272,6 +275,30 @@ impl Db {
             })
             .collect();
         Ok(performance(&ledger, &valued))
+    }
+
+    /// Run the TLH agent on an account: load its type + valued holdings, propose harvest sells
+    /// (only taxable accounts), each checked against the risk gate.
+    pub async fn harvest_plan(
+        &self,
+        account_id: &str,
+        quotes: &Quotes,
+        min_loss_pct: f64,
+    ) -> Result<HarvestPlan, DbError> {
+        let valued = self.value_account(account_id, quotes).await?;
+        let type_str: String = sqlx::query("SELECT account_type FROM account WHERE id = ?")
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| r.get::<String, _>("account_type"))
+            .unwrap_or_else(|| "Individual".to_string());
+        let at = AccountType::from_str_name(&type_str);
+        Ok(propose_harvest(
+            at,
+            &valued,
+            min_loss_pct,
+            &RiskLimits::default(),
+        ))
     }
 }
 

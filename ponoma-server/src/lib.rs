@@ -10,6 +10,7 @@
 //! - [`mcp`]     — MCP tool surface over ponoma data (AI parity).
 #![forbid(unsafe_code)]
 
+pub mod agent;
 pub mod billing;
 pub mod db;
 pub mod domain;

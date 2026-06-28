@@ -164,6 +164,11 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
                 .await?;
             Ok(json!({"order_id": fill.order_id, "shares": fill.shares, "price": fill.price}))
         }
+        "harvest-plan" => {
+            let aid = arg_str("account_id").ok_or(McpError::MissingArg("account_id"))?;
+            let plan = db.harvest_plan(&aid, &quotes_from(args), -5.0).await?;
+            Ok(serde_json::to_value(plan).unwrap_or(json!(null)))
+        }
         other => Err(McpError::UnknownTool(other.to_string())),
     }
 }

@@ -70,6 +70,32 @@ impl AccountType {
             AccountType::LLC => "LLC",
         }
     }
+
+    /// Parse the display string back to the enum; unknown → Individual (taxable default).
+    pub fn from_str_name(s: &str) -> Self {
+        match s {
+            "Joint JTWROS" => AccountType::JointJTWROS,
+            "Joint Tenants in Common" => AccountType::JointTenantsInCommon,
+            "TOD" => AccountType::TOD,
+            "Revocable Trust" => AccountType::RevocableTrust,
+            "Irrevocable Trust" => AccountType::IrrevocableTrust,
+            "Traditional IRA" => AccountType::TraditionalIRA,
+            "Roth IRA" => AccountType::RothIRA,
+            "Rollover IRA" => AccountType::RolloverIRA,
+            "SEP IRA" => AccountType::SEPIRA,
+            "SIMPLE IRA" => AccountType::SIMPLEIRA,
+            "401(k)" => AccountType::FourOhOneK,
+            "403(b)" => AccountType::FourOhThreeB,
+            "529" => AccountType::FivedTwentyNine,
+            "HSA" => AccountType::HSA,
+            "UTMA" => AccountType::UTMA,
+            "UGMA" => AccountType::UGMA,
+            "Corporate" => AccountType::Corporate,
+            "Partnership" => AccountType::Partnership,
+            "LLC" => AccountType::LLC,
+            _ => AccountType::Individual,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
