@@ -35,6 +35,7 @@ use crate::domain::{
 };
 use crate::mcp;
 use crate::paper::{PaperError, RiskLimits};
+use crate::thesis::{Signal as ThesisSignal, Thesis, Zone, synthesize};
 
 // ── wire DTOs (Serialize/Deserialize for Json) ───────────────────────────────
 #[derive(Serialize)]
@@ -98,6 +99,13 @@ pub struct NewAccountReq {
     pub account_type: String,
     #[serde(default)]
     pub cash: f64,
+}
+#[derive(Deserialize)]
+pub struct ThesisReq {
+    pub ticker: String,
+    pub zone: Zone,
+    #[serde(default)]
+    pub signals: Vec<ThesisSignal>,
 }
 #[derive(Serialize)]
 pub struct CreatedDto {
@@ -211,6 +219,14 @@ macro_rules! ponoma_api {
                 path(
                     "rebalance-preview",
                     req_body::<(Json,), RebalanceReq, _>(post::<(Json,), Vec<Trade>>())
+                )
+            ),
+            // POST /api/thesis  (ecosystem-understanding agent)
+            path(
+                "api",
+                path(
+                    "thesis",
+                    req_body::<(Json,), ThesisReq, _>(post::<(Json,), Thesis>())
                 )
             ),
             // POST /api/households  (create)
@@ -489,6 +505,10 @@ pub fn router(db: Db) -> RouterService {
         }
     };
 
+    let h_thesis = move |req: ThesisReq| async move {
+        Ok::<_, ServerError>(synthesize(&req.ticker, req.zone, &req.signals))
+    };
+
     // Handler tuple, right-nested to mirror the alt_all! tree.
     let handlers = (
         h_households,
@@ -509,10 +529,13 @@ pub fn router(db: Db) -> RouterService {
                                     (
                                         h_rebalance,
                                         (
-                                            h_create_household,
+                                            h_thesis,
                                             (
-                                                h_create_account,
-                                                (h_transactions, (h_performance, h_harvest)),
+                                                h_create_household,
+                                                (
+                                                    h_create_account,
+                                                    (h_transactions, (h_performance, h_harvest)),
+                                                ),
                                             ),
                                         ),
                                     ),
@@ -543,6 +566,7 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/accounts/{id}/transactions",
     "GET  /api/accounts/{id}/performance?q=...",
     "GET  /api/accounts/{id}/harvest?q=...   (TLH agent)",
+    "POST /api/thesis                       (ecosystem agent)",
 ];
 
 // Re-export Arc so the binary can share the service if needed.
@@ -681,6 +705,24 @@ mod tests {
             .await
             .json();
         assert_eq!(perf["unrealized_pl"], 2000.0);
+    }
+
+    #[tokio::test]
+    async fn thesis_endpoint() {
+        let c = client().await;
+        let r = c
+            .request(http::Method::POST, "/api/thesis")
+            .json(&serde_json::json!({
+                "ticker": "WSHP",
+                "zone": "Distress",
+                "signals": [{"kind": "going-concern doubt", "bullish": false, "severity": 1.0}]
+            }))
+            .send()
+            .await;
+        assert_eq!(r.status(), 200);
+        let t: serde_json::Value = r.json();
+        assert_eq!(t["verdict"], "Avoid");
+        assert_eq!(t["ticker"], "WSHP");
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.

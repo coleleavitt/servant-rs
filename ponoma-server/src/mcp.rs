@@ -164,6 +164,21 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
                 .await?;
             Ok(json!({"order_id": fill.order_id, "shares": fill.shares, "price": fill.price}))
         }
+        "thesis" => {
+            let ticker = arg_str("ticker").ok_or(McpError::MissingArg("ticker"))?;
+            let zone: crate::thesis::Zone = args
+                .get("zone")
+                .and_then(|z| serde_json::from_value(z.clone()).ok())
+                .unwrap_or(crate::thesis::Zone::Unknown);
+            let signals: Vec<crate::thesis::Signal> = args
+                .get("signals")
+                .and_then(|s| serde_json::from_value(s.clone()).ok())
+                .unwrap_or_default();
+            Ok(
+                serde_json::to_value(crate::thesis::synthesize(&ticker, zone, &signals))
+                    .unwrap_or(json!(null)),
+            )
+        }
         "harvest-plan" => {
             let aid = arg_str("account_id").ok_or(McpError::MissingArg("account_id"))?;
             let plan = db.harvest_plan(&aid, &quotes_from(args), -5.0).await?;

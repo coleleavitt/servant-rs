@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod paper;
 pub mod roles;
 pub mod seed;
+pub mod thesis;
 
 pub use db::{Db, DbError};
 
