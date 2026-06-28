@@ -189,6 +189,16 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
             let review = db.advisor_review(&aid, &quotes_from(args)).await?;
             Ok(serde_json::to_value(review).unwrap_or(json!(null)))
         }
+        "proposal" => {
+            let aid = arg_str("account_id").ok_or(McpError::MissingArg("account_id"))?;
+            let name = arg_str("model_name").unwrap_or_else(|| "Model".to_string());
+            let model: Vec<crate::domain::ModelHolding> = args
+                .get("model")
+                .and_then(|m| serde_json::from_value(m.clone()).ok())
+                .unwrap_or_default();
+            let p = db.proposal(&aid, &name, &model, &quotes_from(args)).await?;
+            Ok(serde_json::to_value(p).unwrap_or(json!(null)))
+        }
         other => Err(McpError::UnknownTool(other.to_string())),
     }
 }

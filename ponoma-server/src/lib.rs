@@ -17,6 +17,7 @@ pub mod domain;
 pub mod http;
 pub mod mcp;
 pub mod paper;
+pub mod proposal;
 pub mod roles;
 pub mod seed;
 pub mod thesis;

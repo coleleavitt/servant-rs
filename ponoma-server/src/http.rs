@@ -35,6 +35,7 @@ use crate::domain::{
 };
 use crate::mcp;
 use crate::paper::{PaperError, RiskLimits};
+use crate::proposal::Proposal;
 use crate::thesis::{Signal as ThesisSignal, Thesis, Zone, synthesize};
 
 // ── wire DTOs (Serialize/Deserialize for Json) ───────────────────────────────
@@ -84,6 +85,13 @@ pub struct BillingReq {
 #[derive(Deserialize)]
 pub struct RebalanceReq {
     pub account_id: String,
+    pub model: Vec<ModelHolding>,
+    pub quotes: std::collections::BTreeMap<String, f64>,
+}
+#[derive(Deserialize)]
+pub struct ProposalReq {
+    pub account_id: String,
+    pub model_name: String,
     pub model: Vec<ModelHolding>,
     pub quotes: std::collections::BTreeMap<String, f64>,
 }
@@ -227,6 +235,14 @@ macro_rules! ponoma_api {
                 path(
                     "thesis",
                     req_body::<(Json,), ThesisReq, _>(post::<(Json,), Thesis>())
+                )
+            ),
+            // POST /api/proposal  (AI copilot)
+            path(
+                "api",
+                path(
+                    "proposal",
+                    req_body::<(Json,), ProposalReq, _>(post::<(Json,), Proposal>())
                 )
             ),
             // POST /api/households  (create)
@@ -535,7 +551,24 @@ pub fn router(db: Db) -> RouterService {
         }
     };
 
-    // Handler tuple, right-nested to mirror the alt_all! tree.
+    let h_proposal = {
+        let db = db.clone();
+        move |req: ProposalReq| {
+            let db = db.clone();
+            async move {
+                let quotes: Quotes = req
+                    .quotes
+                    .into_iter()
+                    .map(|(k, v)| (k.to_uppercase(), v))
+                    .collect();
+                db.proposal(&req.account_id, &req.model_name, &req.model, &quotes)
+                    .await
+                    .map_err(db_err)
+            }
+        }
+    };
+
+    // Handler tuple, right-nested to mirror the alt_all! tree (order = route declaration order).
     let handlers = (
         h_households,
         (
@@ -557,12 +590,15 @@ pub fn router(db: Db) -> RouterService {
                                         (
                                             h_thesis,
                                             (
-                                                h_create_household,
+                                                h_proposal,
                                                 (
-                                                    h_create_account,
+                                                    h_create_household,
                                                     (
-                                                        h_transactions,
-                                                        (h_performance, (h_harvest, h_review)),
+                                                        h_create_account,
+                                                        (
+                                                            h_transactions,
+                                                            (h_performance, (h_harvest, h_review)),
+                                                        ),
                                                     ),
                                                 ),
                                             ),
@@ -779,6 +815,36 @@ mod tests {
             .map(|x| x["kind"].as_str().unwrap())
             .collect();
         assert!(kinds.contains(&"harvest") || kinds.contains(&"concentration"));
+    }
+
+    #[tokio::test]
+    async fn proposal_endpoint() {
+        let c = client().await;
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        let accts: Vec<serde_json::Value> = c
+            .get(&format!("/api/households/{}/accounts", hs[0].id))
+            .await
+            .json();
+        let aid = accts.iter().find(|a| a["number"] == "JTWROS-001").unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r = c
+            .request(http::Method::POST, "/api/proposal")
+            .json(&serde_json::json!({
+                "account_id": aid,
+                "model_name": "Balanced",
+                "model": [{"ticker": "AAPL", "target_weight": 50.0}, {"ticker": "MSFT", "target_weight": 50.0}],
+                "quotes": {"AAPL": 200.0, "MSFT": 400.0}
+            }))
+            .send()
+            .await;
+        assert_eq!(r.status(), 200);
+        let p: serde_json::Value = r.json();
+        assert_eq!(p["model_name"], "Balanced");
+        assert!(
+            p["pre_active_share"].as_f64().unwrap() >= p["post_active_share"].as_f64().unwrap()
+        );
     }
 
     // Owned mirror of HouseholdDto for deserializing in tests.

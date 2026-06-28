@@ -8,6 +8,7 @@ use crate::agent::{AdvisorReview, HarvestPlan, ReviewInputs, advisor_review, pro
 use crate::domain::{
     AccountType,
     LedgerTxn,
+    ModelHolding,
     Performance,
     Position,
     Quotes,
@@ -16,6 +17,7 @@ use crate::domain::{
     value_positions,
 };
 use crate::paper::RiskLimits;
+use crate::proposal::{Proposal, build_proposal};
 
 /// The schema, embedded at compile time. Idempotent (`CREATE TABLE IF NOT EXISTS`), so applying
 /// it on every boot is safe — we run it directly rather than via the `migrate!` macro (which
@@ -332,6 +334,26 @@ impl Db {
             cash,
         };
         Ok(advisor_review(&inp))
+    }
+
+    /// Generate an AI-copilot proposal: rebalance the account to `model`, summarized with drift
+    /// reduction + tax impact. Taxable status comes from the account type.
+    pub async fn proposal(
+        &self,
+        account_id: &str,
+        model_name: &str,
+        model: &[ModelHolding],
+        quotes: &Quotes,
+    ) -> Result<Proposal, DbError> {
+        let valued = self.value_account(account_id, quotes).await?;
+        let type_str: String = sqlx::query("SELECT account_type FROM account WHERE id = ?")
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|r| r.get::<String, _>("account_type"))
+            .unwrap_or_else(|| "Individual".to_string());
+        let taxable = !AccountType::from_str_name(&type_str).is_tax_advantaged();
+        Ok(build_proposal(model_name, &valued, model, quotes, taxable))
     }
 }
 
