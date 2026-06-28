@@ -21,6 +21,7 @@ pub mod proposal;
 pub mod roles;
 pub mod seed;
 pub mod thesis;
+pub mod verify;
 
 pub use db::{Db, DbError};
 
