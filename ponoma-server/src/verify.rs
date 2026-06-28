@@ -1,6 +1,8 @@
 //! Formal-verification rail (Phase 7-8, IDEA.md §6.2). The risk gate (`paper::risk_check`) is the
 //! safety-critical decision the whole agentic layer trusts: "prove the decision/risk logic before
-//! real money." A full Coq development lives outside this crate (see the proof obligations below);
+//! real money." The 5 properties below are PROVEN in Rocq/Coq in `proofs/RiskGate.v` (machine-
+//! checked: `coqc proofs/RiskGate.v`); this module is their executable model-check over Rust.
+//! A full Coq development lives in `proofs/RiskGate.v` (see the proof obligations below);
 //! here we provide the *executable* rail — exhaustive property checks over a dense input grid that
 //! verify the gate's INVARIANTS hold, so a regression in `risk_check` fails CI immediately.
 //!

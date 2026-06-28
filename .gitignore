@@ -14,3 +14,10 @@
 
 # local dev sqlite db
 *.db
+
+# Coq/Rocq build artifacts
+*.vo
+*.vok
+*.vos
+*.glob
+.*.aux
