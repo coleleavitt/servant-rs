@@ -13,6 +13,10 @@ fn id() -> String {
 
 /// Idempotent-ish seed: only runs if no household exists yet.
 pub async fn seed_cole_and_angelina(db: &Db) -> Result<(), DbError> {
+    // Seed starter models independently of the household guard so existing DBs (which already
+    // have the household but no models) get them too. Idempotent: only when no models exist.
+    seed_starter_models(db).await?;
+
     if !db.households().await?.is_empty() {
         return Ok(());
     }
@@ -68,6 +72,29 @@ pub async fn seed_cole_and_angelina(db: &Db) -> Result<(), DbError> {
         "seeded",
         "household",
         "Cole & Angelina + 5 accounts",
+    )
+    .await?;
+    Ok(())
+}
+
+/// Seed a couple of starter target baskets so the Models page isn't empty on first run.
+/// Idempotent: no-op once any model exists.
+async fn seed_starter_models(db: &Db) -> Result<(), DbError> {
+    use crate::domain::ModelHolding;
+    if !db.models().await?.is_empty() {
+        return Ok(());
+    }
+    let mh = |t: &str, w: f64| ModelHolding { ticker: t.into(), target_weight: w };
+    db.upsert_model(
+        None,
+        "Core Growth 60/40",
+        &[mh("AAPL", 30.0), mh("MSFT", 30.0), mh("VTI", 25.0), mh("BND", 15.0)],
+    )
+    .await?;
+    db.upsert_model(
+        None,
+        "Dividend Income",
+        &[mh("SCHD", 40.0), mh("JNJ", 20.0), mh("PG", 20.0), mh("KO", 20.0)],
     )
     .await?;
     Ok(())

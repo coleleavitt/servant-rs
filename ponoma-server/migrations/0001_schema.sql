@@ -210,3 +210,15 @@ CREATE TABLE IF NOT EXISTS proposed_improvement (
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_improvement_alloc ON proposed_improvement(allocation_id);
+
+-- Generic per-namespace key/value store for small client-side state that used to live in the
+-- browser's localStorage (watchlist, taxonomy, prefs, audit, recent, saved views/queries,
+-- security sets, role). One JSON blob per (namespace, key). The book of record (models,
+-- accounts, holdings) has dedicated tables above; this is only for lightweight UI state.
+CREATE TABLE IF NOT EXISTS app_kv (
+  namespace  TEXT NOT NULL,
+  key        TEXT NOT NULL,
+  value      TEXT NOT NULL DEFAULT '',   -- JSON
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (namespace, key)
+);

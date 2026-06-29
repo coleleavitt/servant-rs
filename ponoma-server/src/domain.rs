@@ -111,6 +111,15 @@ pub struct ModelHolding {
     pub target_weight: f64, // percent
 }
 
+/// A target basket (the book-of-record model). Holdings are flat ticker→weight pairs; a sleeve
+/// tree authored in the UI is flattened to these before persisting.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Model {
+    pub id: String,
+    pub name: String,
+    pub holdings: Vec<ModelHolding>,
+}
+
 /// A {ticker -> price} map.
 pub type Quotes = BTreeMap<String, f64>;
 

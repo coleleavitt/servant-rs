@@ -289,6 +289,48 @@ pub struct TransactionDto {
     pub amount: f64,
     pub at: String,
 }
+#[derive(Serialize)]
+pub struct ModelHoldingDto {
+    pub ticker: String,
+    pub target_weight: f64,
+}
+#[derive(Serialize)]
+pub struct ModelDto {
+    pub id: String,
+    pub name: String,
+    pub holdings: Vec<ModelHoldingDto>,
+}
+#[derive(Deserialize)]
+pub struct NewModelHoldingReq {
+    pub ticker: String,
+    pub target_weight: f64,
+}
+#[derive(Deserialize)]
+pub struct UpsertModelReq {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub holdings: Vec<NewModelHoldingReq>,
+}
+#[derive(Deserialize)]
+pub struct DeleteByIdReq {
+    pub id: String,
+}
+#[derive(Serialize)]
+pub struct KvEntryDto {
+    pub key: String,
+    pub value: String,
+}
+#[derive(Deserialize)]
+pub struct KvPutReq {
+    pub key: String,
+    pub value: String,
+}
+#[derive(Serialize)]
+pub struct OkDto {
+    pub ok: bool,
+}
 
 /// Parse `?q=AAPL:200,MSFT:400` into a quote map.
 fn parse_quotes(q: Option<String>) -> Quotes {
@@ -571,6 +613,40 @@ macro_rules! ponoma_api {
                 path(
                     "strategies",
                     req_body::<(Json,), NewStrategyReq, _>(post::<(Json,), CreatedDto>())
+                )
+            ),
+            // GET /api/models  (the book-of-record target baskets)
+            path("api", path("models", get::<(Json,), Vec<ModelDto>>())),
+            // POST /api/models  (create or update — pass id to update)
+            path(
+                "api",
+                path(
+                    "models",
+                    req_body::<(Json,), UpsertModelReq, _>(post::<(Json,), CreatedDto>())
+                )
+            ),
+            // POST /api/models/delete  (no DELETE verb in servant; delete by id in body)
+            path(
+                "api",
+                path(
+                    "models",
+                    path("delete", req_body::<(Json,), DeleteByIdReq, _>(post::<(Json,), OkDto>()))
+                )
+            ),
+            // GET /api/kv/{namespace}  (generic client-state store)
+            path(
+                "api",
+                path("kv", capture::<String, _>("namespace", get::<(Json,), Vec<KvEntryDto>>()))
+            ),
+            // POST /api/kv/{namespace}  (upsert one key)
+            path(
+                "api",
+                path(
+                    "kv",
+                    capture::<String, _>(
+                        "namespace",
+                        req_body::<(Json,), KvPutReq, _>(post::<(Json,), OkDto>())
+                    )
                 )
             ),
             // GET /api/households/{id}/allocations
@@ -1074,6 +1150,80 @@ pub fn router(db: Db) -> RouterService {
             }
         }
     };
+    let h_models = {
+        let db = db.clone();
+        move || {
+            let db = db.clone();
+            async move {
+                let ms = db.models().await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    ms.into_iter()
+                        .map(|m| ModelDto {
+                            id: m.id,
+                            name: m.name,
+                            holdings: m
+                                .holdings
+                                .into_iter()
+                                .map(|h| ModelHoldingDto { ticker: h.ticker, target_weight: h.target_weight })
+                                .collect(),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+    let h_upsert_model = {
+        let db = db.clone();
+        move |req: UpsertModelReq| {
+            let db = db.clone();
+            async move {
+                let holdings: Vec<crate::domain::ModelHolding> = req
+                    .holdings
+                    .into_iter()
+                    .map(|h| crate::domain::ModelHolding { ticker: h.ticker, target_weight: h.target_weight })
+                    .collect();
+                let id = db
+                    .upsert_model(req.id.as_deref(), &req.name, &holdings)
+                    .await
+                    .map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id })
+            }
+        }
+    };
+    let h_delete_model = {
+        let db = db.clone();
+        move |req: DeleteByIdReq| {
+            let db = db.clone();
+            async move {
+                db.delete_model(&req.id).await.map_err(db_err)?;
+                Ok::<_, ServerError>(OkDto { ok: true })
+            }
+        }
+    };
+    let h_kv_all = {
+        let db = db.clone();
+        move |namespace: String| {
+            let db = db.clone();
+            async move {
+                let rows = db.kv_all(&namespace).await.map_err(db_err)?;
+                Ok::<_, ServerError>(
+                    rows.into_iter()
+                        .map(|e| KvEntryDto { key: e.key, value: e.value })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
+    let h_kv_put = {
+        let db = db.clone();
+        move |namespace: String, req: KvPutReq| {
+            let db = db.clone();
+            async move {
+                db.kv_put(&namespace, &req.key, &req.value).await.map_err(db_err)?;
+                Ok::<_, ServerError>(OkDto { ok: true })
+            }
+        }
+    };
     let h_allocations = {
         let db = db.clone();
         move |hid: String| {
@@ -1303,7 +1453,7 @@ pub fn router(db: Db) -> RouterService {
                                                                                 h_jobs,
                                                                                 (
                                                                                 h_comm_models,
-                                                                                (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_allocations, (h_create_allocation, (h_decisions, (h_loop_tick, (h_set_active, (h_allocation_rebalance, (h_propose_improvement, (h_improvements, h_resolve_improvement))))))))))))))))),
+                                                                                (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_models, (h_upsert_model, (h_delete_model, (h_kv_all, (h_kv_put, (h_allocations, (h_create_allocation, (h_decisions, (h_loop_tick, (h_set_active, (h_allocation_rebalance, (h_propose_improvement, (h_improvements, h_resolve_improvement)))))))))))))))))))))),
                                                                                 ),
                                                                             ),
                                                                         ),
@@ -1790,5 +1940,77 @@ mod tests {
     struct HouseholdDtoOwned {
         id: String,
         name: String,
+    }
+
+    #[tokio::test]
+    async fn model_crud_persists_holdings() {
+        let c = client().await;
+        // create a model with two holdings
+        let created: serde_json::Value = c
+            .request(http::Method::POST, "/api/models")
+            .json(&serde_json::json!({
+                "name": "Growth 60/40",
+                "holdings": [
+                    {"ticker": "aapl", "target_weight": 60.0},
+                    {"ticker": "MSFT", "target_weight": 40.0}
+                ]
+            }))
+            .send()
+            .await
+            .json();
+        let mid = created["id"].as_str().unwrap().to_string();
+
+        // it lists with uppercased tickers + weights
+        let models: Vec<serde_json::Value> = c.get("/api/models").await.json();
+        let m = models.iter().find(|m| m["id"] == mid).unwrap();
+        assert_eq!(m["name"], "Growth 60/40");
+        let hs = m["holdings"].as_array().unwrap();
+        assert_eq!(hs.len(), 2);
+        assert!(hs.iter().any(|h| h["ticker"] == "AAPL" && h["target_weight"] == 60.0));
+
+        // update (same id) replaces holdings
+        c.request(http::Method::POST, "/api/models")
+            .json(&serde_json::json!({"id": mid, "name": "Growth 100", "holdings": [{"ticker": "NVDA", "target_weight": 100.0}]}))
+            .send()
+            .await;
+        let models: Vec<serde_json::Value> = c.get("/api/models").await.json();
+        let m = models.iter().find(|m| m["id"] == mid).unwrap();
+        assert_eq!(m["name"], "Growth 100");
+        assert_eq!(m["holdings"].as_array().unwrap().len(), 1);
+
+        // delete
+        c.request(http::Method::POST, "/api/models/delete")
+            .json(&serde_json::json!({"id": mid}))
+            .send()
+            .await;
+        let models: Vec<serde_json::Value> = c.get("/api/models").await.json();
+        assert!(!models.iter().any(|m| m["id"] == mid));
+    }
+
+    #[tokio::test]
+    async fn kv_store_round_trips() {
+        let c = client().await;
+        // empty namespace
+        let rows: Vec<serde_json::Value> = c.get("/api/kv/watchlist").await.json();
+        assert_eq!(rows.len(), 0);
+
+        // put a key
+        c.request(http::Method::POST, "/api/kv/watchlist")
+            .json(&serde_json::json!({"key": "tickers", "value": "[\"AAPL\",\"MSFT\"]"}))
+            .send()
+            .await;
+        let rows: Vec<serde_json::Value> = c.get("/api/kv/watchlist").await.json();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["key"], "tickers");
+        assert_eq!(rows[0]["value"], "[\"AAPL\",\"MSFT\"]");
+
+        // overwrite same key
+        c.request(http::Method::POST, "/api/kv/watchlist")
+            .json(&serde_json::json!({"key": "tickers", "value": "[\"NVDA\"]"}))
+            .send()
+            .await;
+        let rows: Vec<serde_json::Value> = c.get("/api/kv/watchlist").await.json();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["value"], "[\"NVDA\"]");
     }
 }

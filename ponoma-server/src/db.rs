@@ -8,6 +8,7 @@ use crate::agent::{AdvisorReview, HarvestPlan, ReviewInputs, advisor_review, pro
 use crate::domain::{
     AccountType,
     LedgerTxn,
+    Model,
     ModelHolding,
     Performance,
     Position,
@@ -481,20 +482,151 @@ impl Db {
                      .bind(&sid)
                      .fetch_optional(&self.pool)
                      .await?;
-                 if let Some(sr) = strategy_row {
-                     return Ok(sr.try_get("model_id").ok());
-                 }
-             }
-         }
-         Ok(None)
-     }
- }
+              if let Some(sr) = strategy_row {
+                      return Ok(sr.try_get("model_id").ok());
+                  }
+              }
+          }
+          Ok(None)
+      }
+
+    // ── Models (book-of-record target baskets; replaces the old localStorage models) ──────
+
+    /// List all models with their holdings, newest first by name.
+    pub async fn models(&self) -> Result<Vec<Model>, DbError> {
+        let rows = sqlx::query("SELECT id, name FROM model ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let id: String = r.get("id");
+            let holdings = self.model_targets(&id).await?;
+            out.push(Model {
+                id,
+                name: r.get("name"),
+                holdings: holdings
+                    .into_iter()
+                    .map(|(ticker, target_weight)| ModelHolding { ticker, target_weight })
+                    .collect(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Get one model with its holdings.
+    pub async fn model(&self, id: &str) -> Result<Option<Model>, DbError> {
+        let row = sqlx::query("SELECT id, name FROM model WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(r) = row else { return Ok(None) };
+        let mid: String = r.get("id");
+        let holdings = self.model_targets(&mid).await?;
+        Ok(Some(Model {
+            id: mid,
+            name: r.get("name"),
+            holdings: holdings
+                .into_iter()
+                .map(|(ticker, target_weight)| ModelHolding { ticker, target_weight })
+                .collect(),
+        }))
+    }
+
+    /// Create or replace a model + its holdings in one transaction. When `id` is provided and
+    /// exists, the model is updated in place (holdings replaced); otherwise a new id is minted.
+    /// Returns the model id.
+    pub async fn upsert_model(
+        &self,
+        id: Option<&str>,
+        name: &str,
+        holdings: &[ModelHolding],
+    ) -> Result<String, DbError> {
+        let mid = id.map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO model (id, name) VALUES (?, ?) \
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+        )
+        .bind(&mid)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM model_holding WHERE model_id = ?")
+            .bind(&mid)
+            .execute(&mut *tx)
+            .await?;
+        for h in holdings {
+            let ticker = h.ticker.trim().to_uppercase();
+            if ticker.is_empty() {
+                continue;
+            }
+            sqlx::query(
+                "INSERT INTO model_holding (model_id, ticker, target_weight) VALUES (?, ?, ?) \
+                 ON CONFLICT(model_id, ticker) DO UPDATE SET target_weight = excluded.target_weight",
+            )
+            .bind(&mid)
+            .bind(&ticker)
+            .bind(h.target_weight)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        self.audit(None, if id.is_some() { "edited" } else { "created" }, "model", name)
+            .await?;
+        Ok(mid)
+    }
+
+    /// Delete a model (model_holding rows cascade).
+    pub async fn delete_model(&self, id: &str) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM model WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.audit(None, "deleted", "model", id).await?;
+        Ok(())
+    }
+
+    // ── app_kv: generic per-namespace JSON store (replaces remaining localStorage) ─────────
+
+    /// All key/value pairs in a namespace.
+    pub async fn kv_all(&self, namespace: &str) -> Result<Vec<KvEntry>, DbError> {
+        let rows = sqlx::query("SELECT key, value FROM app_kv WHERE namespace = ? ORDER BY key")
+            .bind(namespace)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| KvEntry { key: r.get("key"), value: r.get("value") })
+            .collect())
+    }
+
+    /// Upsert one key in a namespace. `value` is an opaque JSON string.
+    pub async fn kv_put(&self, namespace: &str, key: &str, value: &str) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO app_kv (namespace, key, value, updated_at) VALUES (?, ?, ?, datetime('now')) \
+             ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+        )
+        .bind(namespace)
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+  }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {
     pub id: String,
     pub body: String,
     pub at: String,
+}
+
+/// One row of the generic app_kv store (value is an opaque JSON string).
+#[derive(Clone, Debug, PartialEq)]
+pub struct KvEntry {
+    pub key: String,
+    pub value: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
