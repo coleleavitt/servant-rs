@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::billing::{FeeBasis, FeeSchedule, FeeTier, compute_fee};
 use crate::db::Db;
 use crate::domain::{ModelHolding, Quotes, TradeAction, rebalance_trades};
-use crate::paper::RiskLimits;
+use crate::paper::{PaperError, RiskLimits};
 
 /// One MCP tool: name + human description + a JSON-schema-ish parameter hint.
 #[derive(Clone, Debug, PartialEq)]
@@ -159,8 +159,22 @@ pub async fn call_tool(db: &Db, name: &str, args: &Value) -> Result<Value, McpEr
             let ticker = arg_str("ticker").ok_or(McpError::MissingArg("ticker"))?;
             let shares = arg_f64("shares").ok_or(McpError::MissingArg("shares"))?;
             let price = arg_f64("price").ok_or(McpError::MissingArg("price"))?;
+            // A direct paper-trade must not bypass a managed allocation's safety rails: if an
+            // allocation OWNS this account, enforce its kill switch + risk envelope; otherwise keep
+            // the permissive default for unmanaged accounts.
+            let limits = match db.allocation_for_paper_account(&aid).await? {
+                Some(alloc) => {
+                    if !alloc.active {
+                        return Err(McpError::Paper(PaperError::RiskRejected(
+                            "allocation halted (kill switch) — direct trading blocked".into(),
+                        )));
+                    }
+                    alloc.limits()
+                }
+                None => RiskLimits::default(),
+            };
             let fill = db
-                .paper_execute(&aid, action, &ticker, shares, price, &RiskLimits::default())
+                .paper_execute(&aid, action, &ticker, shares, price, &limits)
                 .await?;
             Ok(json!({"order_id": fill.order_id, "shares": fill.shares, "price": fill.price}))
         }
@@ -290,6 +304,30 @@ mod tests {
         // small admissible trade
         let res = call_tool(&db, "paper-trade", &json!({"account_id": aid, "action": "BUY", "ticker": "VTI", "shares": 2.0, "price": 200.0})).await.unwrap();
         assert_eq!(res["shares"], 2.0);
+    }
+
+    #[tokio::test]
+    async fn halted_allocation_account_rejects_direct_paper_trade() {
+        // The MCP paper-trade tool must respect a managed allocation's kill switch.
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        let hid = db.households().await.unwrap()[0].id.clone();
+        let alloc_id = db
+            .create_allocation(&hid, "Managed", "test", 4, 100_000.0, None, None)
+            .await
+            .unwrap();
+        let paper_aid = db.allocation(&alloc_id).await.unwrap().unwrap().paper_account_id;
+
+        // while active, a small admissible trade succeeds (under the allocation's envelope).
+        let ok = call_tool(&db, "paper-trade", &json!({"account_id": paper_aid, "action": "BUY", "ticker": "VTI", "shares": 2.0, "price": 200.0})).await.unwrap();
+        assert_eq!(ok["shares"], 2.0);
+
+        // halt the allocation — a direct paper-trade on its account must be rejected.
+        db.set_allocation_active(&alloc_id, false).await.unwrap();
+        let res = call_tool(&db, "paper-trade", &json!({"account_id": paper_aid, "action": "BUY", "ticker": "VTI", "shares": 2.0, "price": 200.0})).await;
+        assert!(
+            matches!(res, Err(McpError::Paper(PaperError::RiskRejected(_)))),
+            "halted allocation must reject direct trade: {res:?}"
+        );
     }
 
     #[test]

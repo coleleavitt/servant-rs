@@ -226,6 +226,15 @@ pub struct DecisionDto {
     pub verdict: String,
     pub at: String,
 }
+/// One external per-ticker signal (contract C1). Mirrors the TS shape
+/// `{label, bullish, severity}`; `label` maps onto [`ThesisSignal::kind`].
+#[derive(Deserialize)]
+pub struct ExternalSignalDto {
+    pub label: String,
+    pub bullish: bool,
+    #[serde(default)]
+    pub severity: f64,
+}
 #[derive(Deserialize)]
 pub struct LoopTickReq {
      /// candidate tickers to evaluate this tick
@@ -236,6 +245,10 @@ pub struct LoopTickReq {
      /// live quotes "AAPL:200,MSFT:400"
      #[serde(default)]
      pub quotes: String,
+     /// optional external per-ticker signals (contract C1), keyed by ticker. Merged with the
+     /// deterministic baseline the loop always builds before synthesizing a thesis.
+     #[serde(default)]
+     pub signals: std::collections::HashMap<String, Vec<ExternalSignalDto>>,
  }
 #[derive(Deserialize)]
 pub struct AllocationRebalanceReq {
@@ -894,6 +907,21 @@ pub fn router(db: Db) -> RouterService {
                 } else {
                     TradeAction::Buy
                 };
+                // A direct paper-trade must not bypass a managed allocation's safety rails: if an
+                // allocation OWNS this account, enforce its kill switch (reject when halted) and its
+                // risk envelope; otherwise keep the permissive default for unmanaged accounts.
+                let limits = match db.allocation_for_paper_account(&req.account_id).await {
+                    Ok(Some(alloc)) => {
+                        if !alloc.active {
+                            return Err(ServerError::err422().with_reason(
+                                "allocation halted (kill switch) — direct trading blocked".to_string(),
+                            ));
+                        }
+                        alloc.limits()
+                    }
+                    Ok(None) => RiskLimits::default(),
+                    Err(e) => return Err(db_err(e)),
+                };
                 match db
                     .paper_execute(
                         &req.account_id,
@@ -901,7 +929,7 @@ pub fn router(db: Db) -> RouterService {
                         &req.ticker,
                         req.shares,
                         req.price,
-                        &RiskLimits::default(),
+                        &limits,
                     )
                     .await
                 {
@@ -1358,8 +1386,26 @@ pub fn router(db: Db) -> RouterService {
                     })
                     .collect();
                 let quotes = parse_quotes(Some(req.quotes));
+                // External per-ticker signals (contract C1): `{label,bullish,severity}` → ThesisSignal
+                // (label → kind). Keyed by UPPERCASE ticker; defaults to empty when absent.
+                let external: std::collections::HashMap<String, Vec<ThesisSignal>> = req
+                    .signals
+                    .into_iter()
+                    .map(|(t, sigs)| {
+                        (
+                            t.to_uppercase(),
+                            sigs.into_iter()
+                                .map(|s| ThesisSignal {
+                                    kind: s.label,
+                                    bullish: s.bullish,
+                                    severity: s.severity,
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect();
                 let results = db
-                    .run_loop_tick(&aid, &req.candidates, &zones, &quotes)
+                    .run_loop_tick(&aid, &req.candidates, &zones, &quotes, &external)
                     .await
                     .map_err(|e| ServerError::err422().with_reason(e.to_string()))?;
                 Ok::<_, ServerError>(
@@ -1603,7 +1649,7 @@ mod tests {
 
         // fund a managed allocation
         let created: serde_json::Value = c
-            .request(http::Method::POST, &format!("/api/households/{hid}/allocations"))
+            .request(http::Method::POST, format!("/api/households/{hid}/allocations"))
             .json(&serde_json::json!({"name": "Growth", "mandate": "growth", "risk_level": 4, "funded": 100000.0}))
             .send()
             .await
@@ -1618,7 +1664,7 @@ mod tests {
 
         // run one loop tick: a safe-zone candidate should fill
         let results: Vec<serde_json::Value> = c
-            .request(http::Method::POST, &format!("/api/allocations/{aid}/tick"))
+            .request(http::Method::POST, format!("/api/allocations/{aid}/tick"))
             .json(&serde_json::json!({"candidates": ["AAPL"], "zones": {"AAPL": "safe"}, "quotes": "AAPL:200"}))
             .send()
             .await
@@ -1632,18 +1678,65 @@ mod tests {
 
         // kill switch halts trading
         let _: serde_json::Value = c
-            .request(http::Method::POST, &format!("/api/allocations/{aid}/active"))
+            .request(http::Method::POST, format!("/api/allocations/{aid}/active"))
             .json(&serde_json::json!({"active": false}))
             .send()
             .await
             .json();
         let halted: Vec<serde_json::Value> = c
-            .request(http::Method::POST, &format!("/api/allocations/{aid}/tick"))
+            .request(http::Method::POST, format!("/api/allocations/{aid}/tick"))
             .json(&serde_json::json!({"candidates": ["MSFT"], "zones": {"MSFT": "safe"}, "quotes": "MSFT:400"}))
             .send()
             .await
             .json();
         assert!(halted.is_empty(), "halted allocation must not trade");
+    }
+
+    #[tokio::test]
+    async fn halted_allocation_blocks_direct_paper_trade() {
+        // A direct POST /api/paper-trade on a managed allocation's account must respect the kill
+        // switch — it cannot bypass the allocation's safety rails.
+        let c = client().await;
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        let hid = hs[0].id.clone();
+
+        // fund a managed allocation (creates its own paper account, seeded with cash).
+        let created: serde_json::Value = c
+            .request(http::Method::POST, format!("/api/households/{hid}/allocations"))
+            .json(&serde_json::json!({"name": "Managed", "mandate": "test", "risk_level": 4, "funded": 100000.0}))
+            .send()
+            .await
+            .json();
+        let alloc_id = created["id"].as_str().unwrap().to_string();
+
+        // find its dedicated paper account id.
+        let allocs: Vec<serde_json::Value> =
+            c.get(&format!("/api/households/{hid}/allocations")).await.json();
+        let paper_aid = allocs
+            .iter()
+            .find(|a| a["id"] == alloc_id.as_str())
+            .unwrap()["paper_account_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // while ACTIVE, a small admissible direct trade succeeds (under the allocation's envelope).
+        let ok = c.request(http::Method::POST, "/api/paper-trade")
+            .json(&serde_json::json!({"account_id": paper_aid, "action": "BUY", "ticker": "VTI", "shares": 2.0, "price": 200.0}))
+            .send().await;
+        assert_eq!(ok.status(), 200);
+
+        // engage the kill switch.
+        let halt = c.request(http::Method::POST, format!("/api/allocations/{alloc_id}/active"))
+            .json(&serde_json::json!({"active": false}))
+            .send().await;
+        assert_eq!(halt.status(), 200);
+
+        // a direct paper-trade on the halted allocation's account is now rejected.
+        let blocked = c.request(http::Method::POST, "/api/paper-trade")
+            .json(&serde_json::json!({"account_id": paper_aid, "action": "BUY", "ticker": "VTI", "shares": 2.0, "price": 200.0}))
+            .send().await;
+        assert_eq!(blocked.status(), 422, "halted allocation must reject direct paper-trade");
     }
 
     #[tokio::test]
@@ -1690,7 +1783,7 @@ mod tests {
 
         // create with a brand-new custodian name → it should be created and attached
         let acc: serde_json::Value = c
-            .request(http::Method::POST, &format!("/api/households/{hid}/accounts"))
+            .request(http::Method::POST, format!("/api/households/{hid}/accounts"))
             .json(&serde_json::json!({"number": "INDV-CT-001", "account_type": "Individual", "cash": 0.0, "custodian": "LPL"}))
             .send()
             .await
@@ -1766,7 +1859,7 @@ mod tests {
         assert_eq!(hs.len(), 2);
 
         // create an account under it
-        let acc: serde_json::Value = c.request(http::Method::POST, &format!("/api/households/{hid}/accounts"))
+        let acc: serde_json::Value = c.request(http::Method::POST, format!("/api/households/{hid}/accounts"))
             .json(&serde_json::json!({"number": "INDV-SMITH-001", "account_type": "Individual", "cash": 1000.0}))
             .send().await.json();
         let aid = acc["id"].as_str().unwrap().to_string();
@@ -1939,7 +2032,7 @@ mod tests {
         assert_eq!(empty.len(), 0);
 
         let r = c
-            .request(http::Method::POST, &format!("/api/accounts/{aid}/notes"))
+            .request(http::Method::POST, format!("/api/accounts/{aid}/notes"))
             .json(&serde_json::json!({"body": "client wants more bonds next quarter"}))
             .send()
             .await;

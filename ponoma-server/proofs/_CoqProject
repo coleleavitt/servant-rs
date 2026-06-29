@@ -1,0 +1,12 @@
+# _CoqProject for the ponoma risk-gate proofs (the formal twin of paper::risk_check).
+#
+# Standalone check:   coqc RiskGate.v        (or: rocq compile RiskGate.v)
+# Via coq_makefile:   rocq makefile -f _CoqProject -o CoqMakefile && make -f CoqMakefile
+# Or from the crate:  make -C .. verify
+#
+# RiskGate.v only depends on the Rocq/Coq standard library (Stdlib.QArith), so no external
+# libraries are required. The logical mapping below keeps IDE/dune tooling happy.
+
+-Q . RiskGate
+
+RiskGate.v

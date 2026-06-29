@@ -241,7 +241,7 @@ impl Db {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::bootstrap;
     use crate::thesis::Zone;
     use std::collections::HashMap;
@@ -270,8 +270,8 @@ mod tests {
             .into_iter()
             .collect();
         let cands = vec!["AAPL".to_string(), "MSFT".to_string(), "NVDA".to_string()];
-        let _ = db.run_loop_tick(&aid, &cands, &zones, &quotes).await.unwrap();
-        let _ = db.run_loop_tick(&aid, &cands, &zones, &quotes).await.unwrap();
+        let _ = db.run_loop_tick(&aid, &cands, &zones, &quotes, &HashMap::new()).await.unwrap();
+        let _ = db.run_loop_tick(&aid, &cands, &zones, &quotes, &HashMap::new()).await.unwrap();
 
         // propose: should learn from the size-rejections and propose a bigger maxNames.
         let prop_id = db.propose_improvement(&aid).await.unwrap();
@@ -307,7 +307,7 @@ mod tests {
         // a grey-zone candidate → all holds → proposes a distress-sell rule.
         let zones = HashMap::from([("AAPL".to_string(), Zone::Grey)]);
         let quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
-        db.run_loop_tick(&aid, &["AAPL".to_string()], &zones, &quotes).await.unwrap();
+        db.run_loop_tick(&aid, &["AAPL".to_string()], &zones, &quotes, &HashMap::new()).await.unwrap();
         let pid = db.propose_improvement(&aid).await.unwrap().unwrap();
         db.resolve_improvement(&pid, false).await.unwrap();
         let s = db.strategies().await.unwrap().into_iter().find(|s| s.id == sid).unwrap();

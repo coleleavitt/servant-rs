@@ -60,6 +60,78 @@ impl ManagedAllocation {
     }
 }
 
+/// Build the deterministic BASELINE thesis signals for one candidate this tick. This is always
+/// non-empty evidence (vs. the old empty slice): the distress `zone` is encoded as a signal and,
+/// when cheaply available, a held position's unrealized P&L is added as a momentum signal. The
+/// caller MERGES any external per-ticker signals (contract C1) on top of this baseline before
+/// [`thesis::synthesize`]. `unrealized_pct` is the fractional gain/loss of a held position
+/// (`(price − cost)/cost`), or `None` when the candidate isn't held / can't be priced.
+fn baseline_signals(zone: Zone, unrealized_pct: Option<f64>) -> Vec<thesis::Signal> {
+    let mut out = Vec::new();
+    match zone {
+        Zone::Distress => out.push(thesis::Signal {
+            kind: "distress zone (deterministic)".into(),
+            bullish: false,
+            severity: 0.8,
+        }),
+        Zone::Safe => out.push(thesis::Signal {
+            kind: "safe zone (deterministic)".into(),
+            bullish: true,
+            severity: 0.5,
+        }),
+        // grey is barely-there watch evidence; unknown carries no distress signal at all.
+        Zone::Grey => out.push(thesis::Signal {
+            kind: "grey zone — watch (deterministic)".into(),
+            bullish: false,
+            severity: 0.1,
+        }),
+        Zone::Unknown => {}
+    }
+    if let Some(pct) = unrealized_pct {
+        // a held position's unrealized P&L is a momentum signal: a winner is (mildly) bullish, a
+        // loser (mildly) bearish. severity scales with the magnitude of the move, capped at 1.
+        let sev = pct.abs().clamp(0.0, 1.0);
+        if sev > 1e-9 {
+            out.push(thesis::Signal {
+                kind: "held position unrealized P&L (momentum)".into(),
+                bullish: pct >= 0.0,
+                severity: sev,
+            });
+        }
+    }
+    out
+}
+
+/// Map a mandate `risk_level` (1..4) to a graduated, stored risk envelope. Level 1 is the most
+/// conservative (tiny clips, mostly cash-parked, never short); level 4 is the most aggressive
+/// permitted (the historical default cap). The envelope is a HARD ceiling — the agent loop can
+/// never widen it (PHILOSOPHY.md). Shorting stays disabled at every level (paper book = long-only).
+pub fn limits_for_risk_level(risk_level: i64) -> RiskLimits {
+    match risk_level {
+        1 => RiskLimits {
+            max_order_frac: 0.05,
+            allow_short: false,
+            max_cash_use_frac: 0.25,
+        },
+        2 => RiskLimits {
+            max_order_frac: 0.10,
+            allow_short: false,
+            max_cash_use_frac: 0.50,
+        },
+        3 => RiskLimits {
+            max_order_frac: 0.15,
+            allow_short: false,
+            max_cash_use_frac: 0.75,
+        },
+        // level 4 (and any out-of-range value) = the maximum permitted envelope.
+        _ => RiskLimits {
+            max_order_frac: 0.25,
+            allow_short: false,
+            max_cash_use_frac: 1.0,
+        },
+    }
+}
+
 /// The decision policy a strategy imposes on the loop tick, parsed from `strategy.kind` + the
 /// `rules` JSON. Deterministic; absent a strategy the base distress-thesis policy is used.
 #[derive(Clone, Debug, Default)]
@@ -221,7 +293,7 @@ impl Db {
         }
 
         let id = Uuid::new_v4().to_string();
-        let lim = RiskLimits::default();
+        let lim = limits_for_risk_level(risk_level);
         sqlx::query(
             "INSERT INTO managed_allocation \
              (id, household_id, source_account_id, paper_account_id, strategy_id, name, mandate, \
@@ -277,7 +349,7 @@ impl Db {
         // Create the managed_allocation record: paper_account_id = the existing account,
         // source_account_id = the account itself (marks it as managed-existing for audit).
         let id = Uuid::new_v4().to_string();
-        let lim = RiskLimits::default();
+        let lim = limits_for_risk_level(risk_level);
         sqlx::query(
             "INSERT INTO managed_allocation \
              (id, household_id, source_account_id, paper_account_id, strategy_id, name, mandate, \
@@ -324,6 +396,25 @@ impl Db {
              FROM managed_allocation WHERE id = ?",
         )
         .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(row_to_allocation))
+    }
+
+    /// Find the managed allocation (if any) that OWNS this paper account — i.e. whose
+    /// `paper_account_id` is `account_id`. Direct paper-trade primitives use this to enforce the
+    /// owning allocation's kill switch + risk envelope instead of the permissive default. If no
+    /// allocation owns the account, returns `None` (an unmanaged account keeps default behavior).
+    pub async fn allocation_for_paper_account(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<ManagedAllocation>, DbError> {
+        let row = sqlx::query(
+            "SELECT id, household_id, source_account_id, paper_account_id, strategy_id, name, \
+                    mandate, risk_level, funded, max_order_frac, max_cash_use_frac, allow_short, active \
+             FROM managed_allocation WHERE paper_account_id = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(account_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(row_to_allocation))
@@ -671,17 +762,21 @@ impl Db {
 
      // ── the autonomous loop tick ──────────────────────────────────────────────
      /// Run ONE deterministic loop iteration over `candidates`: for each ticker, synthesize a
-     /// thesis from its distress `zone`, decide an action, run the deterministic risk gate, and on
-     /// admission post a paper fill to the allocation's book. Every decision is logged. A halted
-     /// allocation (kill switch off) does nothing. `quotes` prices the fills; `zones` supplies the
-     /// distress zone per ticker (from the screener). The LLM never executes — it can only feed
-     /// candidates/zones; this gate is the only path to a fill.
+     /// thesis from a NON-EMPTY signal set — a deterministic baseline ([`baseline_signals`]: the
+     /// distress `zone` plus a held-position momentum signal) MERGED with any `external_signals`
+     /// supplied for that ticker (contract C1) — decide an action, run the deterministic risk gate,
+     /// and on admission post a paper fill to the allocation's book. Every decision is logged. A
+     /// halted allocation (kill switch off) does nothing. `quotes` prices the fills; `zones`
+     /// supplies the distress zone per ticker (from the screener); `external_signals` is keyed by
+     /// UPPERCASE ticker and defaults to empty. The LLM never executes — it can only feed
+     /// candidates/zones/signals; this gate is the only path to a fill.
      pub async fn run_loop_tick(
         &self,
         allocation_id: &str,
         candidates: &[String],
         zones: &std::collections::HashMap<String, Zone>,
         quotes: &Quotes,
+        external_signals: &std::collections::HashMap<String, Vec<thesis::Signal>>,
     ) -> Result<Vec<TickResult>, PaperError> {
         let alloc = self
             .allocation(allocation_id)
@@ -705,12 +800,29 @@ impl Db {
                 .map(|s| StrategyPolicy::from_strategy(&s)),
             None => None,
         };
+        // Held cost bases (one cheap query), for the unrealized-P&L momentum baseline signal.
+        let held_cost: std::collections::HashMap<String, f64> = self
+            .positions_for_account(&alloc.paper_account_id)
+            .await?
+            .into_iter()
+            .filter(|p| p.shares.abs() > 1e-9 && p.cost_basis > 0.0)
+            .map(|p| (p.ticker.to_uppercase(), p.cost_basis))
+            .collect();
         let mut results = Vec::new();
 
         for ticker in candidates {
             let t = ticker.to_uppercase();
             let zone = zones.get(&t).copied().unwrap_or(Zone::Unknown);
-            let thesis = thesis::synthesize(&t, zone, &[]);
+            // ALWAYS build a deterministic baseline (zone + held-position momentum), then MERGE any
+            // external per-ticker signals (contract C1) on top before synthesizing.
+            let unrealized_pct = held_cost
+                .get(&t)
+                .and_then(|&cost| quotes.get(&t).map(|&price| (price - cost) / cost));
+            let mut signals = baseline_signals(zone, unrealized_pct);
+            if let Some(ext) = external_signals.get(&t) {
+                signals.extend(ext.iter().cloned());
+            }
+            let thesis = thesis::synthesize(&t, zone, &signals);
             let mut rationale = thesis.rationale.join("; ");
 
             // decide: Opportunity → BUY, Avoid → SELL (trim), else HOLD.
@@ -820,7 +932,7 @@ mod tests {
         let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
         let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
         let results = db
-            .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes)
+            .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes, &HashMap::new())
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
@@ -846,7 +958,7 @@ mod tests {
         let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
         let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
         let results = db
-            .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes)
+            .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes, &HashMap::new())
             .await
             .unwrap();
         assert!(results.is_empty(), "halted allocation must not trade");
@@ -880,7 +992,7 @@ mod tests {
          let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
          let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
          let results = db
-             .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes)
+             .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes, &HashMap::new())
              .await
              .unwrap();
          // base thesis says BUY (safe → opportunity), but the sell-only policy forces HOLD.
@@ -895,7 +1007,7 @@ mod tests {
          let zones2 = HashMap::from([("XYZ".to_string(), Zone::Distress)]);
          let quotes2: Quotes = [("XYZ".to_string(), 50.0)].into_iter().collect();
          let r2 = db
-             .run_loop_tick(&alloc_id, &["XYZ".to_string()], &zones2, &quotes2)
+             .run_loop_tick(&alloc_id, &["XYZ".to_string()], &zones2, &quotes2, &HashMap::new())
              .await
              .unwrap();
          assert_eq!(r2[0].action, "SELL", "distress rule should propose a SELL");
@@ -1101,4 +1213,94 @@ mod tests {
           let txn_count_after_halt = db.transaction_count(&account_id).await.unwrap();
           assert_eq!(txn_count_after_halt, 2, "halted allocation should not add transactions");
       }
+
+    #[tokio::test]
+    async fn external_signals_shift_the_verdict_and_confidence() {
+        // The loop must THINK: deterministic baseline + external signals (contract C1) change the
+        // verdict/confidence vs. the old empty-slice behavior. Two separate allocations isolate
+        // each tick's single decision (the decision log's intra-second ordering is by random id).
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        let hh = &db.households().await.unwrap()[0].id;
+        let base_alloc = db
+            .create_allocation(hh, "Baseline", "evidence-driven", 4, 100_000.0, None, None)
+            .await
+            .unwrap();
+        let ext_alloc = db
+            .create_allocation(hh, "WithSignals", "evidence-driven", 4, 100_000.0, None, None)
+            .await
+            .unwrap();
+
+        let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
+        let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
+
+        // Baseline only (no external signals): safe zone → Opportunity → a gated BUY fills.
+        let base = db
+            .run_loop_tick(&base_alloc, &["AAPL".to_string()], &zones, &quotes, &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(base[0].action, "BUY");
+        assert!(base[0].filled, "safe-zone baseline should BUY: {:?}", base[0]);
+
+        // Same candidate/zone, but strong external BEARISH signals flip the verdict off BUY and
+        // raise confidence (more corroborating evidence).
+        let ext = HashMap::from([(
+            "AAPL".to_string(),
+            vec![
+                thesis::Signal { kind: "SEC investigation".into(), bullish: false, severity: 1.0 },
+                thesis::Signal { kind: "guidance cut".into(), bullish: false, severity: 1.0 },
+                thesis::Signal { kind: "covenant breach".into(), bullish: false, severity: 1.0 },
+            ],
+        )]);
+        let shifted = db
+            .run_loop_tick(&ext_alloc, &["AAPL".to_string()], &zones, &quotes, &ext)
+            .await
+            .unwrap();
+        assert_ne!(
+            shifted[0].action, "BUY",
+            "bearish external signals must shift the verdict off BUY: {:?}",
+            shifted[0]
+        );
+
+        // Each allocation has exactly one decision → unambiguous confidence comparison.
+        let base_conf = db.decisions_for_allocation(&base_alloc, 10).await.unwrap()[0].confidence;
+        let shifted_conf = db.decisions_for_allocation(&ext_alloc, 10).await.unwrap()[0].confidence;
+        assert!(
+            shifted_conf > base_conf,
+            "external evidence should raise confidence: {shifted_conf} !> {base_conf}"
+        );
+    }
+
+    #[tokio::test]
+    async fn risk_level_graduates_the_envelope() {
+        // A low risk_level must yield a TIGHTER cap than a high one (wired at creation).
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        let hh = &db.households().await.unwrap()[0].id;
+        let conservative = db
+            .create_allocation(hh, "Conservative", "capital preservation", 1, 100_000.0, None, None)
+            .await
+            .unwrap();
+        let aggressive = db
+            .create_allocation(hh, "Aggressive", "max growth", 4, 100_000.0, None, None)
+            .await
+            .unwrap();
+        let lo = db.allocation(&conservative).await.unwrap().unwrap().limits();
+        let hi = db.allocation(&aggressive).await.unwrap().unwrap().limits();
+        assert!(
+            lo.max_order_frac < hi.max_order_frac,
+            "level 1 order cap must be tighter than level 4: {} !< {}",
+            lo.max_order_frac, hi.max_order_frac
+        );
+        assert!(lo.max_cash_use_frac < hi.max_cash_use_frac);
+        assert_eq!(lo.max_order_frac, 0.05);
+        assert_eq!(hi.max_order_frac, 0.25);
+
+        // manage_existing_account must graduate the same way.
+        let acct = db.create_account(hh, "GRAD-001", "Individual", 25_000.0, None).await.unwrap();
+        let managed = db
+            .manage_existing_account(hh, &acct, "Managed Low", "preserve", 1, None)
+            .await
+            .unwrap();
+        let m = db.allocation(&managed).await.unwrap().unwrap().limits();
+        assert_eq!(m.max_order_frac, 0.05, "managed-existing should also map risk_level");
+    }
   }
