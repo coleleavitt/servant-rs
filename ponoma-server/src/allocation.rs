@@ -245,6 +245,63 @@ impl Db {
         Ok(id)
     }
 
+    /// Manage an EXISTING account directly: create a managed_allocation record where the
+    /// `paper_account_id` IS the existing account (not a new paper account). The agent runs
+    /// within the account's existing holdings/cash. All trades still flow through the
+    /// deterministic `paper_execute` gate + risk check (paper-only).
+    pub async fn manage_existing_account(
+        &self,
+        household_id: &str,
+        account_id: &str,
+        name: &str,
+        mandate: &str,
+        risk_level: i64,
+        strategy_id: Option<&str>,
+    ) -> Result<String, DbError> {
+        // Validate the account exists and belongs to the household.
+        let account = sqlx::query("SELECT id, household_id, cash FROM account WHERE id = ?")
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(acct_row) = account else {
+            return Err(DbError::Sqlx(sqlx::Error::RowNotFound));
+        };
+        let acct_household_id: String = acct_row.get("household_id");
+        if acct_household_id != household_id {
+            return Err(DbError::Sqlx(sqlx::Error::RowNotFound)); // Pretend the account doesn't exist if not in this household
+        }
+
+        // Use the account's current cash balance as the funded amount (envelope baseline).
+        let funded: f64 = acct_row.get("cash");
+
+        // Create the managed_allocation record: paper_account_id = the existing account,
+        // source_account_id = the account itself (marks it as managed-existing for audit).
+        let id = Uuid::new_v4().to_string();
+        let lim = RiskLimits::default();
+        sqlx::query(
+            "INSERT INTO managed_allocation \
+             (id, household_id, source_account_id, paper_account_id, strategy_id, name, mandate, \
+              risk_level, funded, max_order_frac, max_cash_use_frac, allow_short, active) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)",
+        )
+        .bind(&id)
+        .bind(household_id)
+        .bind(account_id) // source_account_id = the existing account (self-reference)
+        .bind(account_id) // paper_account_id = the existing account (so trades target the real book)
+        .bind(strategy_id)
+        .bind(name)
+        .bind(mandate)
+        .bind(risk_level)
+        .bind(funded)
+        .bind(lim.max_order_frac)
+        .bind(lim.max_cash_use_frac)
+        .execute(&self.pool)
+        .await?;
+        self.audit(Some(household_id), "created", "managed-existing-allocation", name)
+            .await?;
+        Ok(id)
+    }
+
     pub async fn allocations_for_household(
         &self,
         household_id: &str,
@@ -952,9 +1009,96 @@ mod tests {
           // Halted allocation must return empty (no trades).
           assert!(results.is_empty());
 
-         // Verify no ledger entries.
-         let alloc = db.allocation(&alloc_id).await.unwrap().unwrap();
-         let txn_count = db.transaction_count(&alloc.paper_account_id).await.unwrap();
-         assert_eq!(txn_count, 0);
-     }
- }
+          // Verify no ledger entries.
+          let alloc = db.allocation(&alloc_id).await.unwrap().unwrap();
+          let txn_count = db.transaction_count(&alloc.paper_account_id).await.unwrap();
+          assert_eq!(txn_count, 0);
+      }
+
+      #[tokio::test]
+      async fn manage_existing_account_then_rebalance_operates_on_real_account() {
+          let db = bootstrap("sqlite::memory:").await.unwrap();
+          let hh = &db.households().await.unwrap()[0].id;
+
+          // Create an existing account with cash.
+          let account_id = db
+              .create_account(hh, "REAL-001", "Individual", 50_000.0, None)
+              .await
+              .unwrap();
+
+          // Create a model with two holdings that fit within 25% max_order_frac: AAPL 10%, MSFT 10%.
+          let model_id = uuid::Uuid::new_v4().to_string();
+          sqlx::query("INSERT INTO model (id, name) VALUES (?, ?)")
+              .bind(&model_id)
+              .bind("SimpleBalance")
+              .execute(&db.pool)
+              .await
+              .unwrap();
+          sqlx::query("INSERT INTO model_holding (model_id, ticker, target_weight) VALUES (?, ?, ?)")
+              .bind(&model_id)
+              .bind("AAPL")
+              .bind(10.0)
+              .execute(&db.pool)
+              .await
+              .unwrap();
+          sqlx::query("INSERT INTO model_holding (model_id, ticker, target_weight) VALUES (?, ?, ?)")
+              .bind(&model_id)
+              .bind("MSFT")
+              .bind(10.0)
+              .execute(&db.pool)
+              .await
+              .unwrap();
+
+          // Create a strategy referencing the model.
+          let sid = db
+              .create_strategy("Simple", "standard", "10/10 balanced", Some(&model_id), "{}")
+              .await
+              .unwrap();
+
+          // Manage the existing account directly.
+          let alloc_id = db
+              .manage_existing_account(hh, &account_id, "Managed Real", "test mandate", 3, Some(&sid))
+              .await
+              .unwrap();
+
+          // Verify the allocation was created correctly.
+          let alloc = db.allocation(&alloc_id).await.unwrap().unwrap();
+          assert_eq!(alloc.funded, 50_000.0, "funded should be the account's cash balance");
+          assert_eq!(alloc.paper_account_id, account_id, "paper_account_id should be the real account");
+          assert!(alloc.active);
+
+          // Rebalance: should BUY AAPL and MSFT on the real account.
+          // With $50k account: AAPL target $5k, MSFT target $5k.
+          let quotes: Quotes = [("AAPL".to_string(), 200.0), ("MSFT".to_string(), 400.0)].into_iter().collect();
+          let results = db
+              .rebalance_to_model(&alloc_id, &quotes)
+              .await
+              .unwrap();
+
+          // Both AAPL and MSFT should have been BUY'd.
+          assert_eq!(results.len(), 2);
+          let aapl_res = results.iter().find(|r| r.ticker == "AAPL").unwrap();
+          let msft_res = results.iter().find(|r| r.ticker == "MSFT").unwrap();
+          assert_eq!(aapl_res.action, "BUY");
+          assert!(aapl_res.filled, "AAPL should fill: {:?}", aapl_res);
+          assert_eq!(msft_res.action, "BUY");
+          assert!(msft_res.filled, "MSFT should fill: {:?}", msft_res);
+
+          // Verify transaction ledger grew on the REAL account (2 fills).
+          let txn_count = db.transaction_count(&account_id).await.unwrap();
+          assert_eq!(txn_count, 2, "real account should have 2 transactions from rebalance");
+
+          // Verify halted allocation blocks trades.
+          db.set_allocation_active(&alloc_id, false).await.unwrap();
+          let quotes2: Quotes = [("AAPL".to_string(), 200.0), ("MSFT".to_string(), 400.0)].into_iter().collect();
+          let results_halted = db
+              .rebalance_to_model(&alloc_id, &quotes2)
+              .await
+              .unwrap();
+          assert!(results_halted.is_empty(), "halted allocation must not trade");
+
+          // Verify no additional ledger entries were created while halted.
+          let txn_count_after_halt = db.transaction_count(&account_id).await.unwrap();
+          assert_eq!(txn_count_after_halt, 2, "halted allocation should not add transactions");
+      }
+  }

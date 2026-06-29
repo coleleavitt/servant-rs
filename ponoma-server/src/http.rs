@@ -171,6 +171,18 @@ pub struct NewAllocationReq {
     #[serde(default)]
     pub strategy_id: Option<String>,
 }
+#[derive(Deserialize)]
+pub struct ManageAccountReq {
+    pub account_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub mandate: String,
+    #[serde(default = "default_risk")]
+    pub risk_level: i64,
+    #[serde(default)]
+    pub strategy_id: Option<String>,
+}
 fn default_risk() -> i64 {
     3
 }
@@ -667,6 +679,20 @@ macro_rules! ponoma_api {
                         path(
                             "allocations",
                             req_body::<(Json,), NewAllocationReq, _>(post::<(Json,), CreatedDto>())
+                        )
+                    )
+                )
+            ),
+            // POST /api/households/{id}/manage-account  (manage existing account)
+            path(
+                "api",
+                path(
+                    "households",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "manage-account",
+                            req_body::<(Json,), ManageAccountReq, _>(post::<(Json,), CreatedDto>())
                         )
                     )
                 )
@@ -1268,6 +1294,27 @@ pub fn router(db: Db) -> RouterService {
             }
         }
     };
+    let h_manage_account = {
+        let db = db.clone();
+        move |hid: String, req: ManageAccountReq| {
+            let db = db.clone();
+            async move {
+                let name = req.name.unwrap_or_else(|| format!("Managed: {}", req.account_id));
+                let id = db
+                    .manage_existing_account(
+                        &hid,
+                        &req.account_id,
+                        &name,
+                        &req.mandate,
+                        req.risk_level,
+                        req.strategy_id.as_deref(),
+                    )
+                    .await
+                    .map_err(db_err)?;
+                Ok::<_, ServerError>(CreatedDto { id })
+            }
+        }
+    };
     let h_decisions = {
         let db = db.clone();
         move |aid: String| {
@@ -1453,7 +1500,7 @@ pub fn router(db: Db) -> RouterService {
                                                                                 h_jobs,
                                                                                 (
                                                                                 h_comm_models,
-                                                                                (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_models, (h_upsert_model, (h_delete_model, (h_kv_all, (h_kv_put, (h_allocations, (h_create_allocation, (h_decisions, (h_loop_tick, (h_set_active, (h_allocation_rebalance, (h_propose_improvement, (h_improvements, h_resolve_improvement)))))))))))))))))))))),
+                                                                                (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_models, (h_upsert_model, (h_delete_model, (h_kv_all, (h_kv_put, (h_allocations, (h_create_allocation, (h_manage_account, (h_decisions, (h_loop_tick, (h_set_active, (h_allocation_rebalance, (h_propose_improvement, (h_improvements, h_resolve_improvement))))))))))))))))))))))),
                                                                                 ),
                                                                             ),
                                                                         ),

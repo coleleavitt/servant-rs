@@ -18,6 +18,8 @@ pub async fn seed_cole_and_angelina(db: &Db) -> Result<(), DbError> {
     seed_starter_models(db).await?;
 
     if !db.households().await?.is_empty() {
+        // Household already exists; just seed the managed allocation (idempotent).
+        seed_managed_allocation(db).await?;
         return Ok(());
     }
     let hh = id();
@@ -74,6 +76,9 @@ pub async fn seed_cole_and_angelina(db: &Db) -> Result<(), DbError> {
         "Cole & Angelina + 5 accounts",
     )
     .await?;
+    
+    // Seed a managed allocation on one of the accounts.
+    seed_managed_allocation(db).await?;
     Ok(())
 }
 
@@ -97,6 +102,61 @@ async fn seed_starter_models(db: &Db) -> Result<(), DbError> {
         &[mh("SCHD", 40.0), mh("JNJ", 20.0), mh("PG", 20.0), mh("KO", 20.0)],
     )
     .await?;
+    Ok(())
+}
+
+/// Seed a managed allocation on an existing account (so the Allocations page shows something).
+/// Idempotent: only if no managed_allocation exists yet.
+async fn seed_managed_allocation(db: &Db) -> Result<(), DbError> {
+    // Only seed if no managed allocations exist yet.
+    let households = db.households().await?;
+    if households.is_empty() {
+        return Ok(()); // No household to seed for
+    }
+    let hh = &households[0];
+    
+    // Check if there's already a managed allocation.
+    let existing = db.allocations_for_household(&hh.id).await?;
+    if !existing.is_empty() {
+        return Ok(()); // Already have allocations
+    }
+
+    // Get the first account in the household.
+    let accounts = db.accounts_for_household(&hh.id).await?;
+    if accounts.is_empty() {
+        return Ok(()); // No accounts to manage
+    }
+    let account = &accounts[0];
+
+    // Get the first model (starter model).
+    let models = db.models().await?;
+    if models.is_empty() {
+        return Ok(()); // No models available
+    }
+    let model = &models[0];
+
+    // Create a strategy for this model.
+    let strategy_id = db
+        .create_strategy(
+            &format!("Managed: {}", model.name),
+            "standard",
+            &format!("Manage {} toward {}", account.number, model.name),
+            Some(&model.id),
+            "{}",
+        )
+        .await?;
+
+    // Put the account under management.
+    db.manage_existing_account(
+        &hh.id,
+        &account.id,
+        &format!("Managed: {}", account.number),
+        "Agent-managed allocation",
+        3,
+        Some(&strategy_id),
+    )
+    .await?;
+
     Ok(())
 }
 
