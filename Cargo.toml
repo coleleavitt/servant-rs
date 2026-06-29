@@ -7,7 +7,6 @@ members = [
     "servant-docs",
     "servant-openapi",
     "servant-macros",
-    "ponoma-server",
 ]
 
 [workspace.package]

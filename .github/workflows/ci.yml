@@ -34,19 +34,3 @@ jobs:
 
       - name: Rustdoc
         run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --all-features
-
-  coq-proofs:
-    name: Risk-gate proof (Rocq/Coq)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      # Best-effort install of the prover. If it fails, the `verify` target is self-guarding
-      # (skips with exit 0 when neither `rocq` nor `coqc` is on PATH), so CI never breaks on its
-      # absence — but on a healthy runner this machine-checks proofs/RiskGate.v for real.
-      - name: Install Coq (best-effort)
-        run: sudo apt-get update && sudo apt-get install -y coq || echo "coq install failed; verify target will skip"
-
-      - name: Machine-check the risk-gate proof
-        run: make -C ponoma-server verify
