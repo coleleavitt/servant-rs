@@ -49,6 +49,17 @@ pub struct ManagedAllocation {
 }
 
 impl ManagedAllocation {
+    /// True when this allocation manages an EXISTING real account in place rather than a fresh
+    /// paper sandbox. `manage_existing_account` binds both `source_account_id` and
+    /// `paper_account_id` to the same real account id, so the self-reference is the durable signal
+    /// that distinguishes "I am running the household's real book" from "I funded a new paper
+    /// account drawn from a source" (where `source_account_id` is the *source*, a different id, or
+    /// `None`). Fills still flow through `paper_execute` + `risk_check` either way — this only
+    /// tells the UI/agent which kind of account it is operating on.
+    pub fn manages_real_account(&self) -> bool {
+        matches!(&self.source_account_id, Some(src) if src == &self.paper_account_id)
+    }
+
     /// The hard risk envelope for this allocation (mirrors [`RiskLimits`]). The agent loop runs
     /// every proposal through this — it can never widen it.
     pub fn limits(&self) -> RiskLimits {
@@ -895,7 +906,15 @@ fn row_to_allocation(r: sqlx::sqlite::SqliteRow) -> ManagedAllocation {
     ManagedAllocation {
         id: r.get("id"),
         household_id: r.get("household_id"),
-        source_account_id: r.try_get("source_account_id").ok(),
+        // Read the nullable column as `Option<String>` so a SQL NULL maps to `None`. (Decoding a
+        // NULL straight into `String` via `try_get(..).ok()` yields `Some("")` here, which would
+        // surface a bogus empty source on every paper sandbox and muddy `manages_real_account()`.)
+        // An empty string is normalized to `None` as well, for robustness against legacy rows.
+        source_account_id: r
+            .try_get::<Option<String>, _>("source_account_id")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty()),
         paper_account_id: r.get("paper_account_id"),
         strategy_id: r.try_get("strategy_id").ok(),
         name: r.get("name"),
@@ -1215,6 +1234,46 @@ mod tests {
       }
 
     #[tokio::test]
+    async fn manages_real_account_flag_distinguishes_in_place_from_paper_sandbox() {
+        // The derived signal must be true ONLY when source_account_id == paper_account_id, which is
+        // exactly the in-place real-account case (manage_existing_account). A funded paper sandbox —
+        // even one drawn from a real source account — binds a DIFFERENT (fresh) paper account, so it
+        // must read as false.
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        let hh = &db.households().await.unwrap()[0].id;
+        let real = db.create_account(hh, "REAL-9", "Individual", 80_000.0, None).await.unwrap();
+
+        // In place: manages the real book → flagged.
+        let in_place = db
+            .manage_existing_account(hh, &real, "In Place", "managed", 3, None)
+            .await
+            .unwrap();
+        let in_place = db.allocation(&in_place).await.unwrap().unwrap();
+        assert_eq!(in_place.source_account_id.as_deref(), Some(real.as_str()));
+        assert_eq!(in_place.paper_account_id, real);
+        assert!(in_place.manages_real_account(), "in-place real account must be flagged");
+
+        // Funded from a real source: a fresh paper account is created → NOT flagged.
+        let from_source = db
+            .create_allocation(hh, "FromSource", "growth", 4, 10_000.0, Some(&real), None)
+            .await
+            .unwrap();
+        let from_source = db.allocation(&from_source).await.unwrap().unwrap();
+        assert_eq!(from_source.source_account_id.as_deref(), Some(real.as_str()));
+        assert_ne!(from_source.paper_account_id, real, "sandbox uses a dedicated paper account");
+        assert!(!from_source.manages_real_account(), "funded sandbox is not an in-place real account");
+
+        // Self-seeded sandbox (no source) → NOT flagged.
+        let no_source = db
+            .create_allocation(hh, "NoSource", "growth", 4, 10_000.0, None, None)
+            .await
+            .unwrap();
+        let no_source = db.allocation(&no_source).await.unwrap().unwrap();
+        assert!(no_source.source_account_id.is_none());
+        assert!(!no_source.manages_real_account());
+    }
+
+    #[tokio::test]
     async fn external_signals_shift_the_verdict_and_confidence() {
         // The loop must THINK: deterministic baseline + external signals (contract C1) change the
         // verdict/confidence vs. the old empty-slice behavior. Two separate allocations isolate
@@ -1304,3 +1363,4 @@ mod tests {
         assert_eq!(m.max_order_frac, 0.05, "managed-existing should also map risk_level");
     }
   }
+

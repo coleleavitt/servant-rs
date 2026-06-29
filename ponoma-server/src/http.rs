@@ -155,6 +155,15 @@ pub struct AllocationDto {
     pub risk_level: i64,
     pub funded: f64,
     pub paper_account_id: String,
+    /// The account this allocation draws from. When it equals `paper_account_id` the allocation
+    /// manages that real account in place (see `managesRealAccount`); otherwise it's the funding
+    /// source for a fresh paper sandbox (or `None` for an unfunded/self-seeded sandbox).
+    pub source_account_id: Option<String>,
+    /// Derived: `source_account_id == paper_account_id`. Surfaces, to the web, that this allocation
+    /// is operating the household's existing real book rather than a paper sandbox. Fills remain
+    /// paper-only + risk-gated regardless.
+    #[serde(rename = "managesRealAccount")]
+    pub manages_real_account: bool,
     pub strategy_id: Option<String>,
     pub active: bool,
 }
@@ -1287,12 +1296,15 @@ pub fn router(db: Db) -> RouterService {
                 Ok::<_, ServerError>(
                     al.into_iter()
                         .map(|a| AllocationDto {
+                            // Derive the real-account flag before moving fields out of `a`.
+                            manages_real_account: a.manages_real_account(),
                             id: a.id,
                             name: a.name,
                             mandate: a.mandate,
                             risk_level: a.risk_level,
                             funded: a.funded,
                             paper_account_id: a.paper_account_id,
+                            source_account_id: a.source_account_id,
                             strategy_id: a.strategy_id,
                             active: a.active,
                         })
@@ -1740,6 +1752,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_real_account_is_flagged_and_still_gated() {
+        // Managing an EXISTING real account in place must be distinguishable from a fresh paper
+        // sandbox (managesRealAccount=true, source_account_id==paper_account_id==the real account),
+        // yet every fill still flows through the deterministic risk gate (paper-only, no broker).
+        let c = client().await;
+        let hs: Vec<HouseholdDtoOwned> = c.get("/api/households").await.json();
+        let hid = hs[0].id.clone();
+
+        // A real account with cash, then put it under management in place.
+        let acct: serde_json::Value = c
+            .request(http::Method::POST, format!("/api/households/{hid}/accounts"))
+            .json(&serde_json::json!({"number": "REAL-IN-PLACE-1", "account_type": "Individual", "cash": 100000.0}))
+            .send()
+            .await
+            .json();
+        let real_aid = acct["id"].as_str().unwrap().to_string();
+        let managed: serde_json::Value = c
+            .request(http::Method::POST, format!("/api/households/{hid}/manage-account"))
+            .json(&serde_json::json!({"account_id": real_aid, "name": "Real Book", "mandate": "managed", "risk_level": 4}))
+            .send()
+            .await
+            .json();
+        let managed_alloc_id = managed["id"].as_str().unwrap().to_string();
+
+        // A fresh paper sandbox (funded from nothing) for contrast — must NOT be flagged.
+        let sandbox: serde_json::Value = c
+            .request(http::Method::POST, format!("/api/households/{hid}/allocations"))
+            .json(&serde_json::json!({"name": "Sandbox", "mandate": "test", "risk_level": 4, "funded": 50000.0}))
+            .send()
+            .await
+            .json();
+        let sandbox_id = sandbox["id"].as_str().unwrap().to_string();
+
+        // (a)/(b): the allocation JSON exposes source_account_id + the derived managesRealAccount.
+        let allocs: Vec<serde_json::Value> =
+            c.get(&format!("/api/households/{hid}/allocations")).await.json();
+        let managed_row = allocs.iter().find(|a| a["id"] == managed_alloc_id.as_str()).unwrap();
+        assert_eq!(managed_row["managesRealAccount"], true, "in-place real account must be flagged");
+        assert_eq!(managed_row["source_account_id"], real_aid.as_str());
+        assert_eq!(managed_row["paper_account_id"], real_aid.as_str());
+
+        let sandbox_row = allocs.iter().find(|a| a["id"] == sandbox_id.as_str()).unwrap();
+        assert_eq!(sandbox_row["managesRealAccount"], false, "a paper sandbox must NOT be flagged");
+        assert!(sandbox_row["source_account_id"].is_null(), "sandbox has no source account");
+        assert_ne!(
+            sandbox_row["paper_account_id"], real_aid.as_str(),
+            "sandbox trades a dedicated paper account, not the real book"
+        );
+
+        // (c): fills on the managed REAL account still go through the gate. An admissible direct
+        // trade succeeds; after the kill switch it is rejected — same paper risk_check path.
+        let ok = c
+            .request(http::Method::POST, "/api/paper-trade")
+            .json(&serde_json::json!({"account_id": real_aid, "action": "BUY", "ticker": "VTI", "shares": 1.0, "price": 200.0}))
+            .send()
+            .await;
+        assert_eq!(ok.status(), 200, "admissible paper fill on the real book must pass the gate");
+
+        let halt = c
+            .request(http::Method::POST, format!("/api/allocations/{managed_alloc_id}/active"))
+            .json(&serde_json::json!({"active": false}))
+            .send()
+            .await;
+        assert_eq!(halt.status(), 200);
+
+        let blocked = c
+            .request(http::Method::POST, "/api/paper-trade")
+            .json(&serde_json::json!({"account_id": real_aid, "action": "BUY", "ticker": "VTI", "shares": 1.0, "price": 200.0}))
+            .send()
+            .await;
+        assert_eq!(
+            blocked.status(),
+            422,
+            "a halted real-account allocation must still gate (reject) fills"
+        );
+    }
+
+    #[tokio::test]
     async fn strategy_endpoint_create_and_list() {
         let c = client().await;
         let created: serde_json::Value = c
@@ -2152,5 +2242,32 @@ mod tests {
         let rows: Vec<serde_json::Value> = c.get("/api/kv/watchlist").await.json();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["value"], "[\"NVDA\"]");
+    }
+
+    /// Regression: `GET /api/kv/{namespace}` (the web hits `/db/api/kv/app` on /analyze) must not
+    /// 500 when the `app_kv` table is absent. A live DB file created before the `app_kv` migration
+    /// existed has no such table; the read/write path now self-heals it instead of erroring.
+    #[tokio::test]
+    async fn kv_store_survives_missing_table() {
+        let db = bootstrap("sqlite::memory:").await.unwrap();
+        // Simulate a stale production DB created before app_kv was introduced.
+        sqlx::query("DROP TABLE app_kv").execute(&db.pool).await.unwrap();
+        let c = TestClient::from_service(router(db));
+
+        // The exact request the web makes on page load — must be 200 with an empty list, not 500.
+        let resp = c.get("/api/kv/app").await;
+        assert_eq!(resp.status(), 200, "GET /api/kv/app must not 500 on a stale (un-migrated) DB");
+        let rows: Vec<serde_json::Value> = resp.json();
+        assert_eq!(rows.len(), 0);
+
+        // A write through the same path must also self-heal the table, then round-trip.
+        c.request(http::Method::POST, "/api/kv/app")
+            .json(&serde_json::json!({"key": "theme", "value": "\"dark\""}))
+            .send()
+            .await;
+        let rows: Vec<serde_json::Value> = c.get("/api/kv/app").await.json();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["key"], "theme");
+        assert_eq!(rows[0]["value"], "\"dark\"");
     }
 }

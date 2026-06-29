@@ -588,8 +588,31 @@ impl Db {
 
     // ── app_kv: generic per-namespace JSON store (replaces remaining localStorage) ─────────
 
+    /// Guarantee the `app_kv` table exists before touching it. A DB file created before this
+    /// table was added to the schema (e.g. a long-lived production file whose process predates the
+    /// migration) has no such table, so a plain `SELECT`/`INSERT` would error and surface as a 500
+    /// on `GET /db/api/kv/app` (the request the web makes on /analyze). The DDL mirrors
+    /// `migrations/0001_schema.sql` and is idempotent, so calling it on every access is cheap and
+    /// self-heals a stale DB. (SqlSafeStr: the statement is a trusted constant with no user input.)
+    async fn ensure_kv_table(&self) -> Result<(), DbError> {
+        sqlx::query(sqlx::AssertSqlSafe(
+            "CREATE TABLE IF NOT EXISTS app_kv ( \
+               namespace  TEXT NOT NULL, \
+               key        TEXT NOT NULL, \
+               value      TEXT NOT NULL DEFAULT '', \
+               updated_at TEXT NOT NULL DEFAULT (datetime('now')), \
+               PRIMARY KEY (namespace, key) \
+             )"
+            .to_string(),
+        ))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// All key/value pairs in a namespace.
     pub async fn kv_all(&self, namespace: &str) -> Result<Vec<KvEntry>, DbError> {
+        self.ensure_kv_table().await?;
         let rows = sqlx::query("SELECT key, value FROM app_kv WHERE namespace = ? ORDER BY key")
             .bind(namespace)
             .fetch_all(&self.pool)
@@ -602,6 +625,7 @@ impl Db {
 
     /// Upsert one key in a namespace. `value` is an opaque JSON string.
     pub async fn kv_put(&self, namespace: &str, key: &str, value: &str) -> Result<(), DbError> {
+        self.ensure_kv_table().await?;
         sqlx::query(
             "INSERT INTO app_kv (namespace, key, value, updated_at) VALUES (?, ?, ?, datetime('now')) \
              ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
