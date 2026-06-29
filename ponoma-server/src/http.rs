@@ -216,15 +216,20 @@ pub struct DecisionDto {
 }
 #[derive(Deserialize)]
 pub struct LoopTickReq {
-    /// candidate tickers to evaluate this tick
-    pub candidates: Vec<String>,
-    /// distress zone per ticker ("safe"/"grey"/"distress"/"unknown")
-    #[serde(default)]
-    pub zones: std::collections::HashMap<String, String>,
-    /// live quotes "AAPL:200,MSFT:400"
-    #[serde(default)]
-    pub quotes: String,
-}
+     /// candidate tickers to evaluate this tick
+     pub candidates: Vec<String>,
+     /// distress zone per ticker ("safe"/"grey"/"distress"/"unknown")
+     #[serde(default)]
+     pub zones: std::collections::HashMap<String, String>,
+     /// live quotes "AAPL:200,MSFT:400"
+     #[serde(default)]
+     pub quotes: String,
+ }
+#[derive(Deserialize)]
+pub struct AllocationRebalanceReq {
+     /// live quotes "AAPL:200,MSFT:400" (for pricing the rebalance deltas)
+     pub quotes: String,
+ }
 #[derive(Serialize)]
 pub struct TickResultDto {
     pub ticker: String,
@@ -622,6 +627,20 @@ macro_rules! ponoma_api {
                         path(
                             "active",
                             req_body::<(Json,), SetActiveReq, _>(post::<(Json,), CreatedDto>())
+                        )
+                    )
+                )
+            ),
+            // POST /api/allocations/{id}/rebalance  (rebalance toward model)
+            path(
+                "api",
+                path(
+                    "allocations",
+                    capture::<String, _>(
+                        "id",
+                        path(
+                            "rebalance",
+                            req_body::<(Json,), AllocationRebalanceReq, _>(post::<(Json,), Vec<TickResultDto>>())
                         )
                     )
                 )
@@ -1172,6 +1191,32 @@ pub fn router(db: Db) -> RouterService {
             }
         }
     };
+    let h_allocation_rebalance = {
+        let db = db.clone();
+        move |aid: String, req: AllocationRebalanceReq| {
+            let db = db.clone();
+            async move {
+                let quotes = parse_quotes(Some(req.quotes));
+                let results = db
+                    .rebalance_to_model(&aid, &quotes)
+                    .await
+                    .map_err(|e| ServerError::err422().with_reason(e.to_string()))?;
+                Ok::<_, ServerError>(
+                    results
+                        .into_iter()
+                        .map(|r| TickResultDto {
+                            ticker: r.ticker,
+                            action: r.action,
+                            admitted: r.admitted,
+                            filled: r.filled,
+                            thesis: r.thesis,
+                            verdict: r.verdict,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    };
     // RSI (rails-respecting): propose a refinement from outcomes, list proposals, approve/reject.
     let h_propose_improvement = {
         let db = db.clone();
@@ -1257,8 +1302,8 @@ pub fn router(db: Db) -> RouterService {
                                                                             (
                                                                                 h_jobs,
                                                                                 (
-                                                                                    h_comm_models,
-                                                                                    (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_allocations, (h_create_allocation, (h_decisions, (h_loop_tick, (h_set_active, (h_propose_improvement, (h_improvements, h_resolve_improvement)))))))))))))))),
+                                                                                h_comm_models,
+                                                                                (h_comm_compare, (h_audit, (h_notes_get, (h_notes_add, (h_caps, (h_prospect, (h_strategies, (h_create_strategy, (h_allocations, (h_create_allocation, (h_decisions, (h_loop_tick, (h_set_active, (h_allocation_rebalance, (h_propose_improvement, (h_improvements, h_resolve_improvement))))))))))))))))),
                                                                                 ),
                                                                             ),
                                                                         ),
@@ -1317,6 +1362,7 @@ pub const ROUTES: &[&str] = &[
     "GET  /api/allocations/{id}/decisions",
     "POST /api/allocations/{id}/tick        (run one agent loop iteration)",
     "POST /api/allocations/{id}/active      (kill switch)",
+    "POST /api/allocations/{id}/rebalance   (rebalance toward model)",
     "POST /api/allocations/{id}/self-improve (propose a refinement)",
     "GET  /api/allocations/{id}/improvements",
     "POST /api/improvements/{id}/resolve    (human approve/reject)",

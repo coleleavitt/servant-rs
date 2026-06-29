@@ -434,24 +434,61 @@ impl Db {
         Ok(id)
     }
 
-    /// Notes for an account, newest first.
-    pub async fn notes_for_account(&self, account_id: &str) -> Result<Vec<Note>, DbError> {
-        let rows = sqlx::query(
-            "SELECT id, body, at FROM account_note WHERE account_id = ? ORDER BY at DESC, id DESC",
-        )
-        .bind(account_id)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| Note {
-                id: r.get("id"),
-                body: r.get("body"),
-                at: r.get("at"),
-            })
-            .collect())
-    }
-}
+     /// Notes for an account, newest first.
+     pub async fn notes_for_account(&self, account_id: &str) -> Result<Vec<Note>, DbError> {
+         let rows = sqlx::query(
+             "SELECT id, body, at FROM account_note WHERE account_id = ? ORDER BY at DESC, id DESC",
+         )
+         .bind(account_id)
+         .fetch_all(&self.pool)
+         .await?;
+         Ok(rows
+             .into_iter()
+             .map(|r| Note {
+                 id: r.get("id"),
+                 body: r.get("body"),
+                 at: r.get("at"),
+             })
+             .collect())
+     }
+
+     /// Load a model's target holdings: (ticker, target_weight_percent).
+     pub async fn model_targets(&self, model_id: &str) -> Result<Vec<(String, f64)>, DbError> {
+         let rows = sqlx::query(
+             "SELECT ticker, target_weight FROM model_holding WHERE model_id = ? ORDER BY ticker",
+         )
+         .bind(model_id)
+         .fetch_all(&self.pool)
+         .await?;
+         Ok(rows
+             .into_iter()
+             .map(|r| (r.get::<String, _>("ticker").to_uppercase(), r.get("target_weight")))
+             .collect())
+     }
+
+     /// Get an allocation's model_id via its strategy.
+     pub async fn allocation_model_id(&self, allocation_id: &str) -> Result<Option<String>, DbError> {
+         let row = sqlx::query(
+             "SELECT ma.strategy_id FROM managed_allocation ma WHERE ma.id = ?",
+         )
+         .bind(allocation_id)
+         .fetch_optional(&self.pool)
+         .await?;
+         if let Some(r) = row {
+             let strategy_id: Option<String> = r.try_get("strategy_id").ok();
+             if let Some(sid) = strategy_id {
+                 let strategy_row = sqlx::query("SELECT model_id FROM strategy WHERE id = ?")
+                     .bind(&sid)
+                     .fetch_optional(&self.pool)
+                     .await?;
+                 if let Some(sr) = strategy_row {
+                     return Ok(sr.try_get("model_id").ok());
+                 }
+             }
+         }
+         Ok(None)
+     }
+ }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {

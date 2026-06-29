@@ -360,14 +360,266 @@ impl Db {
         Ok(n as usize)
     }
 
-    // ── the autonomous loop tick ──────────────────────────────────────────────
-    /// Run ONE deterministic loop iteration over `candidates`: for each ticker, synthesize a
-    /// thesis from its distress `zone`, decide an action, run the deterministic risk gate, and on
-    /// admission post a paper fill to the allocation's book. Every decision is logged. A halted
-    /// allocation (kill switch off) does nothing. `quotes` prices the fills; `zones` supplies the
-    /// distress zone per ticker (from the screener). The LLM never executes — it can only feed
-    /// candidates/zones; this gate is the only path to a fill.
-    pub async fn run_loop_tick(
+     // ── model-aware rebalance ────────────────────────────────────────────────
+     /// Rebalance a managed allocation toward its model's target weights.
+     /// For each target ticker, computes delta$ = target$ − current$, then BUYs or SELLs to close
+     /// that gap. Every trade passes through the risk gate. A halted allocation (kill switch off)
+     /// does nothing. Returns TickResults for each target ticker. Respects strategy policy
+     /// (buy-only, sell-only, etc.).
+     pub async fn rebalance_to_model(
+         &self,
+         allocation_id: &str,
+         quotes: &Quotes,
+     ) -> Result<Vec<TickResult>, PaperError> {
+         let alloc = self
+             .allocation(allocation_id)
+             .await?
+             .ok_or(PaperError::AccountNotFound)?;
+         if !alloc.active {
+             // kill switch engaged — log and return empty.
+             self.log_decision(allocation_id, "rebalance", "", "", 0.0, "allocation halted (kill switch)", 0.0, false, "halted")
+                 .await?;
+             return Ok(Vec::new());
+         }
+
+         // Load the allocation's model (via its strategy).
+         let model_id = self.allocation_model_id(allocation_id).await?;
+         let Some(mid) = model_id else {
+             // No model assigned — log and return nothing.
+             return Ok(vec![TickResult {
+                 ticker: "".into(),
+                 action: "HOLD".into(),
+                 admitted: false,
+                 filled: false,
+                 thesis: "no model assigned to allocation".into(),
+                 verdict: "no model".into(),
+             }]);
+         };
+
+         let limits = alloc.limits();
+         let target_holdings = self.model_targets(&mid).await?;
+         let val = self.value_account(&alloc.paper_account_id, quotes).await?;
+         let total_value = val.total_value;
+
+         // Load current positions for held tickers (for delta sizing).
+         let current_positions = self.positions_for_account(&alloc.paper_account_id).await?;
+         let mut current_by_ticker: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+         for pos in current_positions {
+             current_by_ticker.insert(pos.ticker.to_uppercase(), pos.shares);
+         }
+
+         // Load strategy policy (if any) to check buy-only / sell-only constraints.
+         let policy = match &alloc.strategy_id {
+             Some(sid) => self
+                 .strategies()
+                 .await?
+                 .into_iter()
+                 .find(|s| &s.id == sid)
+                 .map(|s| StrategyPolicy::from_strategy(&s)),
+             None => None,
+         };
+
+         let mut results = Vec::new();
+         let churn_threshold = (total_value * 0.005).max(1.0); // min 0.5% of value or 1 share price unit
+
+         for (ticker, target_wt_pct) in target_holdings {
+             let t = ticker.to_uppercase();
+             
+             // Get current price.
+             let Some(&price) = quotes.get(&t) else {
+                 self.log_decision(allocation_id, "rebalance", &t, "HOLD", 0.0, &format!("rebalance toward {target_wt_pct:.1}%"), 0.0, false, "no quote")
+                     .await?;
+                 results.push(TickResult {
+                     ticker: t,
+                     action: "HOLD".into(),
+                     admitted: false,
+                     filled: false,
+                     thesis: "no quote available".into(),
+                     verdict: "no quote".into(),
+                 });
+                 continue;
+             };
+
+             // Compute target notional and current notional.
+             let target_notional = (target_wt_pct / 100.0) * total_value;
+             let current_shares = current_by_ticker.get(&t).copied().unwrap_or(0.0);
+             let current_notional = current_shares * price;
+             let delta_notional = target_notional - current_notional;
+
+             // Skip trivial deltas (churn threshold).
+             if delta_notional.abs() < churn_threshold {
+                 self.log_decision(
+                     allocation_id,
+                     "rebalance",
+                     &t,
+                     "HOLD",
+                     0.0,
+                     &format!("rebalance toward {target_wt_pct:.1}%; delta ${delta_notional:.2} < threshold ${churn_threshold:.2}"),
+                     0.0,
+                     false,
+                     "below churn threshold",
+                 )
+                 .await?;
+                 results.push(TickResult {
+                     ticker: t,
+                     action: "HOLD".into(),
+                     admitted: false,
+                     filled: false,
+                     thesis: "delta below churn threshold".into(),
+                     verdict: "hold".into(),
+                 });
+                 continue;
+             }
+
+             // Determine action and shares to trade.
+             let (action, shares_to_trade) = if delta_notional > 0.0 {
+                 // BUY to reach target
+                 (TradeAction::Buy, (delta_notional / price).floor())
+             } else {
+                 // SELL to reach target
+                 (TradeAction::Sell, (-delta_notional / price).floor().min(current_shares))
+             };
+
+             if shares_to_trade <= 0.0 {
+                 self.log_decision(
+                     allocation_id,
+                     "rebalance",
+                     &t,
+                     match action {
+                         TradeAction::Buy => "BUY",
+                         TradeAction::Sell => "SELL",
+                     },
+                     0.0,
+                     &format!("rebalance toward {target_wt_pct:.1}%"),
+                     0.0,
+                     false,
+                     "size below one share",
+                 )
+                 .await?;
+                 let act = match action {
+                     TradeAction::Buy => "BUY",
+                     TradeAction::Sell => "SELL",
+                 };
+                 results.push(TickResult {
+                     ticker: t,
+                     action: act.into(),
+                     admitted: false,
+                     filled: false,
+                     thesis: "delta < one share".into(),
+                     verdict: "too small".into(),
+                 });
+                 continue;
+             }
+
+              // Apply strategy policy constraints.
+              let (allowed_action, rationale) = if let Some(ref p) = policy {
+                 let (opt_act, reason) = match action {
+                     TradeAction::Buy if p.buy_only || !p.sell_only => (Some(action), None),
+                     TradeAction::Buy if p.sell_only => (None, Some("strategy: sell-only")),
+                     TradeAction::Sell if p.sell_only || !p.buy_only => (Some(action), None),
+                     TradeAction::Sell if p.buy_only => (None, Some("strategy: buy-only")),
+                     _ => (Some(action), None),
+                 };
+                 (opt_act, reason.map(|r| r.to_string()).unwrap_or_default())
+             } else {
+                 (Some(action), String::new())
+             };
+
+              let Some(final_action) = allowed_action else {
+                  let act = match action {
+                      TradeAction::Buy => "BUY",
+                      TradeAction::Sell => "SELL",
+                  };
+                  let thesis_str = format!("rebalance toward {target_wt_pct:.1}%; {rationale}");
+                  self.log_decision(
+                      allocation_id,
+                      "rebalance",
+                      &t,
+                      act,
+                      shares_to_trade,
+                      &thesis_str,
+                      0.0,
+                      false,
+                      &rationale,
+                  )
+                  .await?;
+                  results.push(TickResult {
+                      ticker: t,
+                      action: act.into(),
+                      admitted: false,
+                      filled: false,
+                      thesis: thesis_str,
+                      verdict: rationale,
+                  });
+                  continue;
+              };
+
+             let act_str = match final_action {
+                 TradeAction::Buy => "BUY",
+                 TradeAction::Sell => "SELL",
+             };
+
+             // Gate + act: run through the risk gate.
+             match self.paper_execute(&alloc.paper_account_id, final_action, &t, shares_to_trade, price, &limits).await {
+                 Ok(_) => {
+                     self.log_decision(
+                         allocation_id,
+                         "rebalance",
+                         &t,
+                         act_str,
+                         shares_to_trade,
+                         &format!("rebalance toward {target_wt_pct:.1}%"),
+                         1.0,
+                         true,
+                         "filled (paper)",
+                     )
+                     .await?;
+                     results.push(TickResult {
+                         ticker: t,
+                         action: act_str.into(),
+                         admitted: true,
+                         filled: true,
+                         thesis: format!("rebalance toward {target_wt_pct:.1}%"),
+                         verdict: "filled".into(),
+                     });
+                 }
+                 Err(PaperError::RiskRejected(why)) => {
+                     self.log_decision(
+                         allocation_id,
+                         "rebalance",
+                         &t,
+                         act_str,
+                         shares_to_trade,
+                         &format!("rebalance toward {target_wt_pct:.1}%"),
+                         1.0,
+                         false,
+                         &why,
+                     )
+                     .await?;
+                     results.push(TickResult {
+                         ticker: t,
+                         action: act_str.into(),
+                         admitted: false,
+                         filled: false,
+                         thesis: format!("rebalance toward {target_wt_pct:.1}%"),
+                         verdict: why,
+                     });
+                 }
+                 Err(e) => return Err(e),
+             }
+         }
+
+         Ok(results)
+     }
+
+     // ── the autonomous loop tick ──────────────────────────────────────────────
+     /// Run ONE deterministic loop iteration over `candidates`: for each ticker, synthesize a
+     /// thesis from its distress `zone`, decide an action, run the deterministic risk gate, and on
+     /// admission post a paper fill to the allocation's book. Every decision is logged. A halted
+     /// allocation (kill switch off) does nothing. `quotes` prices the fills; `zones` supplies the
+     /// distress zone per ticker (from the screener). The LLM never executes — it can only feed
+     /// candidates/zones; this gate is the only path to a fill.
+     pub async fn run_loop_tick(
         &self,
         allocation_id: &str,
         candidates: &[String],
@@ -554,41 +806,155 @@ mod tests {
         assert!(all.iter().any(|s| s.id == id && s.name == "Distress Avoid"));
     }
 
-    #[tokio::test]
-    async fn strategy_policy_overrides_the_tick() {
-        // a distress-avoid (sell-only) strategy must block a safe-zone BUY.
-        let db = bootstrap("sqlite::memory:").await.unwrap();
-        let hh = &db.households().await.unwrap()[0].id;
-        let sid = db
-            .create_strategy("Defensive", "distress-avoid", "sell-only", None, r#"{"sellWhenZBelow":1.8}"#)
-            .await
-            .unwrap();
-        let alloc_id = db
-            .create_allocation(hh, "Defensive Alloc", "capital preservation", 2, 100_000.0, None, Some(&sid))
-            .await
-            .unwrap();
+     #[tokio::test]
+     async fn strategy_policy_overrides_the_tick() {
+         // a distress-avoid (sell-only) strategy must block a safe-zone BUY.
+         let db = bootstrap("sqlite::memory:").await.unwrap();
+         let hh = &db.households().await.unwrap()[0].id;
+         let sid = db
+             .create_strategy("Defensive", "distress-avoid", "sell-only", None, r#"{"sellWhenZBelow":1.8}"#)
+             .await
+             .unwrap();
+         let alloc_id = db
+             .create_allocation(hh, "Defensive Alloc", "capital preservation", 2, 100_000.0, None, Some(&sid))
+             .await
+             .unwrap();
 
-        let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
-        let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
-        let results = db
-            .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes)
-            .await
-            .unwrap();
-        // base thesis says BUY (safe → opportunity), but the sell-only policy forces HOLD.
-        assert_eq!(results[0].action, "HOLD");
-        assert!(!results[0].filled);
-        let decisions = db.decisions_for_allocation(&alloc_id, 10).await.unwrap();
-        assert!(decisions.iter().any(|d| d.thesis.contains("sell-only")));
+         let zones = HashMap::from([("AAPL".to_string(), Zone::Safe)]);
+         let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
+         let results = db
+             .run_loop_tick(&alloc_id, &["AAPL".to_string()], &zones, &quotes)
+             .await
+             .unwrap();
+         // base thesis says BUY (safe → opportunity), but the sell-only policy forces HOLD.
+         assert_eq!(results[0].action, "HOLD");
+         assert!(!results[0].filled);
+         let decisions = db.decisions_for_allocation(&alloc_id, 10).await.unwrap();
+         assert!(decisions.iter().any(|d| d.thesis.contains("sell-only")));
 
-        // and a distress-zone name is SOLD per the rule (after we give it something to sell):
-        // distress override fires even though there's nothing held — it proposes SELL, which the
-        // gate then rejects (no shares), proving the rule path runs.
-        let zones2 = HashMap::from([("XYZ".to_string(), Zone::Distress)]);
-        let quotes2: Quotes = [("XYZ".to_string(), 50.0)].into_iter().collect();
-        let r2 = db
-            .run_loop_tick(&alloc_id, &["XYZ".to_string()], &zones2, &quotes2)
-            .await
-            .unwrap();
-        assert_eq!(r2[0].action, "SELL", "distress rule should propose a SELL");
-    }
-}
+         // and a distress-zone name is SOLD per the rule (after we give it something to sell):
+         // distress override fires even though there's nothing held — it proposes SELL, which the
+         // gate then rejects (no shares), proving the rule path runs.
+         let zones2 = HashMap::from([("XYZ".to_string(), Zone::Distress)]);
+         let quotes2: Quotes = [("XYZ".to_string(), 50.0)].into_iter().collect();
+         let r2 = db
+             .run_loop_tick(&alloc_id, &["XYZ".to_string()], &zones2, &quotes2)
+             .await
+             .unwrap();
+         assert_eq!(r2[0].action, "SELL", "distress rule should propose a SELL");
+     }
+
+     #[tokio::test]
+     async fn rebalance_to_model_buys_and_sells() {
+         let db = bootstrap("sqlite::memory:").await.unwrap();
+         let hh = &db.households().await.unwrap()[0].id;
+
+         // Create a model with two holdings: AAPL 10%, MSFT 10% (to fit within 25% max_order_frac).
+         let model_id = uuid::Uuid::new_v4().to_string();
+         sqlx::query("INSERT INTO model (id, name) VALUES (?, ?)")
+             .bind(&model_id)
+             .bind("Balanced")
+             .execute(&db.pool)
+             .await
+             .unwrap();
+         sqlx::query("INSERT INTO model_holding (model_id, ticker, target_weight) VALUES (?, ?, ?)")
+             .bind(&model_id)
+             .bind("AAPL")
+             .bind(10.0)
+             .execute(&db.pool)
+             .await
+             .unwrap();
+         sqlx::query("INSERT INTO model_holding (model_id, ticker, target_weight) VALUES (?, ?, ?)")
+             .bind(&model_id)
+             .bind("MSFT")
+             .bind(10.0)
+             .execute(&db.pool)
+             .await
+             .unwrap();
+
+         // Create a strategy that references this model.
+         let sid = db
+             .create_strategy("Balanced", "standard", "10/10 balanced", Some(&model_id), "{}")
+             .await
+             .unwrap();
+
+         // Create an allocation with that strategy, funded with 100k.
+         let alloc_id = db
+             .create_allocation(hh, "Balanced Alloc", "balanced portfolio", 3, 100_000.0, None, Some(&sid))
+             .await
+             .unwrap();
+
+         // Rebalance with quotes: AAPL $200, MSFT $400.
+         // Target: AAPL $10k (50 sh @ $200), MSFT $10k (25 sh @ $400).
+         let quotes: Quotes = [("AAPL".to_string(), 200.0), ("MSFT".to_string(), 400.0)]
+             .into_iter()
+             .collect();
+         let results = db
+             .rebalance_to_model(&alloc_id, &quotes)
+             .await
+             .unwrap();
+
+         // Both AAPL and MSFT should have been BUY'd to reach targets.
+         assert_eq!(results.len(), 2);
+         let aapl_res = results.iter().find(|r| r.ticker == "AAPL").unwrap();
+         let msft_res = results.iter().find(|r| r.ticker == "MSFT").unwrap();
+         assert_eq!(aapl_res.action, "BUY");
+         assert!(aapl_res.filled, "AAPL should fill: {:?}", aapl_res);
+         assert_eq!(msft_res.action, "BUY");
+         assert!(msft_res.filled, "MSFT should fill: {:?}", msft_res);
+
+         // Transaction ledger should have 2 entries now.
+         let alloc = db.allocation(&alloc_id).await.unwrap().unwrap();
+         let txn_count = db.transaction_count(&alloc.paper_account_id).await.unwrap();
+         assert_eq!(txn_count, 2, "expected 2 fills in ledger");
+     }
+
+     #[tokio::test]
+     async fn rebalance_kills_switch_halts() {
+         let db = bootstrap("sqlite::memory:").await.unwrap();
+         let hh = &db.households().await.unwrap()[0].id;
+
+          // Create a model.
+          let model_id = uuid::Uuid::new_v4().to_string();
+          sqlx::query("INSERT INTO model (id, name) VALUES (?, ?)")
+              .bind(&model_id)
+              .bind("Test")
+              .execute(&db.pool)
+              .await
+              .unwrap();
+         sqlx::query("INSERT INTO model_holding (model_id, ticker, target_weight) VALUES (?, ?, ?)")
+             .bind(&model_id)
+             .bind("AAPL")
+             .bind(100.0)
+             .execute(&db.pool)
+             .await
+             .unwrap();
+
+         // Create strategy and allocation.
+         let sid = db
+             .create_strategy("Test", "standard", "test", Some(&model_id), "{}")
+             .await
+             .unwrap();
+         let alloc_id = db
+             .create_allocation(hh, "Halted", "test", 2, 50_000.0, None, Some(&sid))
+             .await
+             .unwrap();
+
+         // Halt the allocation.
+         db.set_allocation_active(&alloc_id, false).await.unwrap();
+
+         let quotes: Quotes = [("AAPL".to_string(), 200.0)].into_iter().collect();
+         let results = db
+             .rebalance_to_model(&alloc_id, &quotes)
+             .await
+             .unwrap();
+
+          // Halted allocation must return empty (no trades).
+          assert!(results.is_empty());
+
+         // Verify no ledger entries.
+         let alloc = db.allocation(&alloc_id).await.unwrap().unwrap();
+         let txn_count = db.transaction_count(&alloc.paper_account_id).await.unwrap();
+         assert_eq!(txn_count, 0);
+     }
+ }
