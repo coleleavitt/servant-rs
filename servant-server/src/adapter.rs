@@ -13,6 +13,10 @@ use std::task::{Context, Poll};
 
 use bytes::Buf;
 
+#[cfg(feature = "hyper")]
+use crate::listener::ConnectionLimits;
+#[cfg(feature = "hyper")]
+use crate::listener::accept_loop;
 use crate::request::{RequestBody, RequestData, parse_query, path_segments};
 use crate::response::{ResponseBody, error_response};
 use crate::result::RouteResult;
@@ -111,32 +115,62 @@ where
 }
 
 /// Serve a router over HTTP/1 on an accepted-connection loop (test/example
-/// helper). Available with the `hyper` feature.
+/// helper), with the default [`ConnectionLimits`]. Available with the `hyper`
+/// feature.
+///
+/// Runs until the task is dropped: a failed `accept` is logged and retried
+/// after a short pause, and connections past the cap are closed. See
+/// [`serve_listener_with_limits`].
 #[cfg(feature = "hyper")]
 pub async fn serve_listener(
     listener: tokio::net::TcpListener,
     service: RouterService,
 ) -> std::io::Result<()> {
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let peer = stream.peer_addr().ok();
-        let io = hyper_util::rt::TokioIo::new(stream);
-        let service = service.clone();
-        // Insert per-connection info (peer address) so `RemoteHost`/`IsSecure`
-        // can read it, then delegate to the router service.
-        let hyper_svc =
-            hyper::service::service_fn(move |mut req: http::Request<hyper::body::Incoming>| {
-                req.extensions_mut().insert(ConnectionInfo {
-                    remote_addr: peer,
-                    secure: false,
-                });
-                let service = service.clone();
-                async move { Ok::<_, std::convert::Infallible>(service.handle(req).await) }
-            });
-        tokio::spawn(async move {
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(io, hyper_svc)
-                .await;
+    serve_listener_with_limits(listener, service, ConnectionLimits::default()).await
+}
+
+/// [`serve_listener`] with explicit connection limits. Available with the
+/// `hyper` feature.
+///
+/// Never returns an error: the `Result` is kept for the signature's sake.
+#[cfg(feature = "hyper")]
+pub async fn serve_listener_with_limits(
+    listener: tokio::net::TcpListener,
+    service: RouterService,
+    limits: ConnectionLimits,
+) -> std::io::Result<()> {
+    match accept_loop(listener, limits, move |stream, peer| {
+        serve_http1(
+            stream,
+            service.clone(),
+            ConnectionInfo {
+                remote_addr: peer,
+                secure: false,
+            },
+        )
+    })
+    .await {}
+}
+
+/// Serve HTTP/1 on one connection, inserting `conn` into every request so
+/// `RemoteHost`/`IsSecure` can read it.
+///
+/// hyper's timer is set so its header-read timeout applies: a client that
+/// opens a connection and never finishes a request's headers is dropped
+/// rather than holding one of the connection slots for good.
+#[cfg(feature = "hyper")]
+pub(crate) async fn serve_http1<I>(io: I, service: RouterService, conn: ConnectionInfo)
+where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let hyper_svc =
+        hyper::service::service_fn(move |mut req: http::Request<hyper::body::Incoming>| {
+            req.extensions_mut().insert(conn);
+            let service = service.clone();
+            async move { Ok::<_, Infallible>(service.handle(req).await) }
         });
-    }
+    let _ = hyper::server::conn::http1::Builder::new()
+        .timer(hyper_util::rt::TokioTimer::new())
+        .serve_connection(hyper_util::rt::TokioIo::new(io), hyper_svc)
+        .await;
 }

@@ -27,6 +27,8 @@ pub mod adapter;
 pub mod context;
 pub mod extract;
 pub mod handler;
+#[cfg(feature = "hyper")]
+pub mod listener;
 pub mod raw;
 pub mod request;
 pub mod response;
@@ -43,6 +45,8 @@ pub mod tls;
 pub use adapter::{ConnectionInfo, RouterService};
 pub use context::{AuthCheck, BasicAuthCheck, Context, NamedContext, ResourceProvider};
 pub use extract::ServerChain;
+#[cfg(feature = "hyper")]
+pub use listener::ConnectionLimits;
 pub use raw::RawRequest;
 pub use result::RouteResult;
 pub use router::Router;

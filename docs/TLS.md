@@ -35,6 +35,30 @@ same connection metadata before dispatching to the router. Its client-auth
 policy is explicit (`Off`, `Optional`, or `Required`); the actual certificate
 verifier lives in the caller-provided `rustls::ServerConfig`.
 
+The listener survives transient trouble and bounds what a client can hold:
+
+- A failed `accept` (the process is out of file descriptors, a connection was
+  aborted before it was accepted) is logged through the `log` facade and
+  retried after a short pause (100 ms by default); it never ends the server.
+- At most `ConnectionLimits::max_connections` connections (1024 by default)
+  are served at once; a connection accepted past the cap is closed at once.
+- A client must finish the TLS handshake within
+  `RustlsConfig::handshake_timeout` (10 s by default) and send each request's
+  headers within hyper's header-read timeout (30 s), or it is dropped.
+
+```rust,no_run
+# use std::{sync::Arc, time::Duration};
+# use servant_server::{ConnectionLimits, RustlsConfig};
+# fn example(server_config: rustls::ServerConfig) -> RustlsConfig {
+RustlsConfig::new(Arc::new(server_config))
+    .with_handshake_timeout(Duration::from_secs(5))
+    .with_connection_limits(ConnectionLimits::new().with_max_connections(256))
+# }
+```
+
+The plain-HTTP `adapter::serve_listener` shares the same accept loop;
+`adapter::serve_listener_with_limits` takes explicit `ConnectionLimits`.
+
 You can also terminate TLS with a reverse proxy, platform load balancer, or a
 custom listener and then set the same connection metadata before dispatching to
 the router. That preserves the Servant-style handler guarantee without forcing a
