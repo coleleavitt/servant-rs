@@ -117,7 +117,8 @@ where
             }
         };
         let Ok(permit) = permits.clone().try_acquire_owned() else {
-            log::warn!(
+            // Debug, not warn: in a flood this runs once per refused connection.
+            log::debug!(
                 "servant-server: {} connections open; closing the one from {peer:?}",
                 limits.max_connections
             );
