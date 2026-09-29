@@ -7,6 +7,17 @@ and this project uses semantic versioning once published.
 
 ## [Unreleased]
 
+### Fixed
+
+- `serve_rustls_listener` and `adapter::serve_listener` no longer end on the
+  first failed `accept` (`EMFILE`, `ECONNABORTED`): the error is logged and the
+  accept is retried after a short pause.
+- Both serving loops cap connections served at once (`ConnectionLimits`,
+  1024 by default) and close connections past the cap, the TLS adapter drops a
+  client that has not finished its handshake within
+  `RustlsConfig::handshake_timeout` (10 s by default), and hyper's 30 s
+  header-read timeout now applies.
+
 ## [0.2.0] - Unreleased
 
 ### Added

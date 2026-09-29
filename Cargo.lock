@@ -860,6 +860,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "log",
  "mime",
  "percent-encoding",
  "pin-project-lite",

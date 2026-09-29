@@ -27,14 +27,15 @@ hyper-util = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
 
 [features]
 default = ["hyper"]
-hyper = ["dep:hyper", "dep:hyper-util", "dep:tokio"]
+hyper = ["dep:hyper", "dep:hyper-util", "dep:tokio", "dep:log"]
 rustls = ["hyper", "dep:rustls", "dep:tokio-rustls"]
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true

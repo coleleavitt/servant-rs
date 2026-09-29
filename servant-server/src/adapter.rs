@@ -13,6 +13,10 @@ use std::task::{Context, Poll};
 
 use bytes::Buf;
 
+#[cfg(feature = "hyper")]
+use crate::listener::ConnectionLimits;
+#[cfg(feature = "hyper")]
+use crate::listener::accept_loop;
 use crate::request::{RequestBody, RequestData, parse_query, path_segments};
 use crate::response::{ResponseBody, error_response};
 use crate::result::RouteResult;
@@ -111,32 +115,114 @@ where
 }
 
 /// Serve a router over HTTP/1 on an accepted-connection loop (test/example
-/// helper). Available with the `hyper` feature.
+/// helper), with the default [`ConnectionLimits`]. Available with the `hyper`
+/// feature.
+///
+/// Runs until the task is dropped: a failed `accept` is logged and retried
+/// after a short pause, and connections past the cap are closed. See
+/// [`serve_listener_with_limits`].
 #[cfg(feature = "hyper")]
 pub async fn serve_listener(
     listener: tokio::net::TcpListener,
     service: RouterService,
 ) -> std::io::Result<()> {
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let peer = stream.peer_addr().ok();
-        let io = hyper_util::rt::TokioIo::new(stream);
-        let service = service.clone();
-        // Insert per-connection info (peer address) so `RemoteHost`/`IsSecure`
-        // can read it, then delegate to the router service.
-        let hyper_svc =
-            hyper::service::service_fn(move |mut req: http::Request<hyper::body::Incoming>| {
-                req.extensions_mut().insert(ConnectionInfo {
-                    remote_addr: peer,
-                    secure: false,
-                });
-                let service = service.clone();
-                async move { Ok::<_, std::convert::Infallible>(service.handle(req).await) }
-            });
-        tokio::spawn(async move {
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(io, hyper_svc)
-                .await;
+    serve_listener_with_limits(listener, service, ConnectionLimits::default()).await
+}
+
+/// [`serve_listener`] with explicit connection limits. Available with the
+/// `hyper` feature.
+///
+/// Never returns an error: the `Result` is kept for the signature's sake.
+#[cfg(feature = "hyper")]
+pub async fn serve_listener_with_limits(
+    listener: tokio::net::TcpListener,
+    service: RouterService,
+    limits: ConnectionLimits,
+) -> std::io::Result<()> {
+    match accept_loop(listener, limits, move |stream, peer| {
+        serve_http1(
+            stream,
+            service.clone(),
+            ConnectionInfo {
+                remote_addr: peer,
+                secure: false,
+            },
+        )
+    })
+    .await {}
+}
+
+/// How long the serving adapters wait for a request's headers before closing
+/// the connection.
+#[cfg(feature = "hyper")]
+pub const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Serve HTTP/1 on one connection, inserting `conn` into every request so
+/// `RemoteHost`/`IsSecure` can read it.
+///
+/// A client that opens a connection and does not finish a request's headers
+/// within [`HEADER_READ_TIMEOUT`] is dropped rather than holding one of the
+/// connection slots for good. (hyper applies the timeout only with a timer set,
+/// so both are set explicitly.)
+#[cfg(feature = "hyper")]
+pub(crate) async fn serve_http1<I>(io: I, service: RouterService, conn: ConnectionInfo)
+where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let hyper_svc =
+        hyper::service::service_fn(move |mut req: http::Request<hyper::body::Incoming>| {
+            req.extensions_mut().insert(conn);
+            let service = service.clone();
+            async move { Ok::<_, Infallible>(service.handle(req).await) }
         });
+    let _ = hyper::server::conn::http1::Builder::new()
+        .timer(hyper_util::rt::TokioTimer::new())
+        .header_read_timeout(HEADER_READ_TIMEOUT)
+        .serve_connection(hyper_util::rt::TokioIo::new(io), hyper_svc)
+        .await;
+}
+
+#[cfg(all(test, feature = "hyper"))]
+mod tests {
+    use std::time::Duration;
+
+    use servant::prelude::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_request_headers_are_dropped_at_the_deadline() {
+        let router = crate::serve(get::<(PlainText,), String>(), || async {
+            Ok::<_, ServerError>(String::new())
+        });
+        let (server_side, mut client) = tokio::io::duplex(1024);
+        let start = tokio::time::Instant::now();
+        let server = tokio::spawn(serve_http1(
+            server_side,
+            RouterService::new(router),
+            ConnectionInfo::default(),
+        ));
+
+        // Half a request, then nothing.
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        let read =
+            tokio::time::timeout(HEADER_READ_TIMEOUT * 4, client.read_to_end(&mut response)).await;
+        assert!(
+            read.is_ok(),
+            "connection still open after {:?}",
+            start.elapsed()
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= HEADER_READ_TIMEOUT
+                && elapsed < HEADER_READ_TIMEOUT + Duration::from_secs(1),
+            "closed after {elapsed:?}"
+        );
+        server.await.unwrap();
     }
 }
